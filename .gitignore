@@ -1,0 +1,28 @@
+# Gradle & build artifacts
+.gradle/
+.kotlin/
+build/
+app/build/
+*/build/
+
+# Local environment & signing secrets
+local.properties
+*.jks
+*.keystore
+*.bks
+*.p12
+
+# Built binaries
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# IDE files
+.idea/
+*.iml
+.DS_Store
+captures/
+.cxx/
+.navigation/
+*.log
