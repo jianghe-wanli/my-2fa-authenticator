@@ -7,11 +7,11 @@
 ## 核心特性
 
 ### 1. 标准协议与全兼容迁移
-- **OTP 算法内核**：严格遵循 RFC 6238 (TOTP) 与 RFC 4226 (HOTP)，支持 HMAC-SHA1 / SHA256 / SHA512、6/8 位数字、15~120 秒自定义周期，以及 **Steam Guard 5 字符令牌**。
-- **二维码与协议导入**：
+- **OTP 算法内核**：严格遵循 RFC 6238 (TOTP) 与 RFC 4226 (HOTP)，支持 HMAC-SHA1 / SHA256 / SHA512、6/8 位数字、10~300 秒自定义周期，以及 **Steam Guard 5 字符令牌**。
+- **二维码与多生态协议导入**：
   - `CameraX` 原生实时扫描 + **相册选图静态解码**（支持透明背景 QR PNG 与高分辨率大图缩放解码）。
-  - 兼容标准 `otpauth://totp|hotp|steam/...` URI、裸 Base32 密钥输入，以及 `otpauth-migration://offline?data=...` **Google Authenticator 批量迁移协议**（自动拆分多批与智能工作区/标签推断）。
-- **批量迁移导出**：二次 PIN 鉴权后按分包生成标准 `otpauth-migration://` 二维码与链接，自动跳过不可导出的损坏/Steam 令牌并提示周期兼容说明。
+  - 兼容标准 `otpauth://totp|hotp|steam/...`（含多行批量文本）、裸 Base32 密钥输入、`otpauth-migration://offline?data=...` **Google Authenticator 批量迁移协议**，以及 **Aegis / 2FAS / Bitwarden** 未加密 JSON 导入（自动拆分多批与智能工作区/标签推断）。
+- **单条与批量迁移导出**：详情页支持单凭据标准 `otpauth://` 二维码导出；二次 PIN 鉴权后按分包生成标准 `otpauth-migration://` 二维码与链接，自动跳过不可导出的损坏/Steam 令牌并提示周期兼容说明。
 
 ### 2. 多工作区与防拥挤交互
 - **工作区横向分页 + 平台手风琴折叠**：按工作区（`全部` / `个人生活` / `工作主业` / `运维多租户` 等）组织，默认全部折叠收起，支持「记忆上次」「仅展开置顶」「默认全折叠」三种折叠策略及一键全部展开/折叠。
@@ -20,14 +20,15 @@
 
 ### 3. 硬件级离线安全体系
 - **Android KeyStore 硬件加密**：所有 2FA Secret 经硬件 TEE / StrongBox 托管的 AES-256-GCM 主密钥加密存盘（`vault_document.json`），严格延迟解密，未解锁前明文永不进内存。
-- **独立主密码 + 生物识别 + 胁迫销毁**：
-  - 6 位独立保险库密码（`PBKDF2WithHmacSHA256`，100,000 次迭代 + 随机盐 + 常量时间比对）。
+- **独立主密码 + 生物识别 + 胁迫销毁 + 离线安全体检**：
+  - 6 位独立保险库密码（`PBKDF2WithHmacSHA256`，210,000 次迭代 + 随机盐 + 常量时间比对，兼容旧版 100K 哈希）。
   - 基于系统单调时钟 `elapsedRealtime()` 的防篡改冷却锁定（设备重启仍延续剩余冷却）。
   - 支持 `BiometricPrompt` 强生物识别解锁、**胁迫密码（静默销毁并伪装空库）**、多次错密自动物理自毁，以及设置页长按 3 秒三步确认物理自毁。
+  - 内置离线「安全体检中心」（重复密钥、损坏/弱熵凭据、未设胁迫码、备份超期提醒等）。
 - **隐私与前后台防窥**：
-  - 锁屏期间强制开启 `FLAG_SECURE` 防截屏/防录屏/防多任务卡片偷窥，解锁后遵循用户开关。
+  - 支持列表/详情**隐私防窥遮罩**（默认打码 + 盲点直接复制 + 10 秒临时显码），锁屏与敏感弹窗强制开启 `FLAG_SECURE` 及防点击劫持保护。
   - 后台超时自动锁定（支持立即 / 30 秒 / 1 分钟 / 5 分钟 / 关闭），并对系统相册/SAF 选择器提供安全短窗豁免。
-  - 剪贴板敏感标记（Android 13+ `EXTRA_IS_SENSITIVE`）+ 限时自动清除。
+  - 剪贴板敏感标记（Android 13+ `EXTRA_IS_SENSITIVE`）+ 限时自动清除倒计时浮条与一键立即抹除。
 - **端到端加密灾备（`.jdf2`）**：使用 `PBKDF2WithHmacSHA256`（210,000 次迭代）+ AES-256-GCM 零知识加密导出/导入文件与密文，兼容 legacy v1 备份读取。
 
 ---
@@ -43,13 +44,13 @@ app/src/main/java/com/f2a/authenticator/
 │   ├── local/                   # TokenVaultRepository, TokenRepository, VaultPreferencesStore
 │   └── model/                   # AuthToken, Workspace, Tag, VaultPreferences (Schema v2)
 ├── di/                          # 手工轻量依赖注入容器 (AppContainer)
-├── security/                    # SecurityLockManager, BiometricHelper, BackgroundLockMonitor, Clock
-├── totp/                        # OtpEngine, OtpUriParser, GoogleMigrationDecoder/Encoder, WorkspaceInferenceEngine
+├── security/                    # SecurityLockManager, BiometricHelper, BackgroundLockMonitor, VaultHealthAnalyzer, Clock
+├── totp/                        # OtpEngine, OtpUriParser, GoogleMigrationDecoder/Encoder, ExternalImportParser, WorkspaceInferenceEngine
 ├── ui/
 │   ├── components/              # OtpTicker(0 重组时钟隔离), IssuerAccordionCard, AccountItemRow 等
 │   ├── screens/                 # lock, home, detail, scan(CameraX+ZXing), settings, dialogs
 │   ├── state/ & viewmodel/      # 单向数据流 UiState 与独立 ViewModel
-│   └── theme/                   # Cyber-Vault 深浅色语义色表与 Design Tokens
+│   └── theme/                   # Precision Deep-Blue Vault 深浅色语义色表与 Design Tokens
 └── utils/                       # SecureClipboard, ClipboardGuard
 ```
 
@@ -65,7 +66,7 @@ app/src/main/java/com/f2a/authenticator/
 ### 本地构建与单元测试
 
 ```bash
-# 运行全部 JVM 单元测试（49 项用例）
+# 运行全部 JVM 单元测试（78 项用例）
 ./gradlew testDebugUnitTest
 
 # 构建 Debug APK

@@ -13,7 +13,7 @@ data class Workspace(
     @SerializedName("id") val id: String = UUID.randomUUID().toString(),
     @SerializedName("name") val name: String = "未命名工作区",
     @SerializedName("iconName") val iconName: String = "Folder",
-    @SerializedName("colorHex") val colorHex: String = "#3B82F6",
+    @SerializedName("colorHex") val colorHex: String = "#1D4ED8",
     @SerializedName("orderIndex") val orderIndex: Int = 0,
     @SerializedName("isBiometricProtected") val isBiometricProtected: Boolean = false
 ) {
@@ -25,14 +25,14 @@ data class Workspace(
         @Suppress("USELESS_ELVIS")
         val safeIcon = (iconName ?: "").ifBlank { "Folder" }
         @Suppress("USELESS_ELVIS")
-        val safeColor = (colorHex ?: "").ifBlank { "#3B82F6" }
+        val safeColor = (colorHex ?: "").ifBlank { "#1D4ED8" }
         return copy(id = safeId, name = safeName, iconName = safeIcon, colorHex = safeColor)
     }
 
     companion object {
-        val DEFAULT_PERSONAL = Workspace("workspace_personal", "个人生活", "Person", "#3B82F6", 0)
-        val DEFAULT_WORK = Workspace("workspace_work", "工作主业", "BusinessCenter", "#10B981", 1)
-        val DEFAULT_DEVOPS = Workspace("workspace_devops", "运维多租户", "Terminal", "#F59E0B", 2)
+        val DEFAULT_PERSONAL = Workspace("workspace_personal", "个人生活", "Person", "#1D4ED8", 0)
+        val DEFAULT_WORK = Workspace("workspace_work", "工作主业", "BusinessCenter", "#0F766E", 1)
+        val DEFAULT_DEVOPS = Workspace("workspace_devops", "运维多租户", "Terminal", "#B45309", 2)
     }
 }
 
@@ -42,7 +42,7 @@ data class Workspace(
 data class Tag(
     @SerializedName("id") val id: String = UUID.randomUUID().toString(),
     @SerializedName("name") val name: String = "标签",
-    @SerializedName("colorHex") val colorHex: String = "#6366F1",
+    @SerializedName("colorHex") val colorHex: String = "#1D4ED8",
     @SerializedName("isSystemDefault") val isSystemDefault: Boolean = false
 ) {
     fun normalize(): Tag {
@@ -51,15 +51,15 @@ data class Tag(
         @Suppress("USELESS_ELVIS")
         val safeName = (name ?: "").ifBlank { "标签" }
         @Suppress("USELESS_ELVIS")
-        val safeColor = (colorHex ?: "").ifBlank { "#6366F1" }
+        val safeColor = (colorHex ?: "").ifBlank { "#1D4ED8" }
         return copy(id = safeId, name = safeName, colorHex = safeColor)
     }
 
     companion object {
-        val TAG_MAIN = Tag("tag_main", "👑 主要账号", "#3B82F6", true)
-        val TAG_SUB = Tag("tag_sub", "🍼 辅助小号", "#10B981", true)
-        val TAG_ASSET = Tag("tag_asset", "💰 核心资产", "#F59E0B", true)
-        val TAG_DEV = Tag("tag_dev", "🛠️ 测试开发", "#8B5CF6", true)
+        val TAG_MAIN = Tag("tag_main", "主要账号", "#1D4ED8", true)
+        val TAG_SUB = Tag("tag_sub", "辅助小号", "#0F766E", true)
+        val TAG_ASSET = Tag("tag_asset", "核心资产", "#B45309", true)
+        val TAG_DEV = Tag("tag_dev", "测试开发", "#335C99", true)
     }
 }
 
@@ -92,6 +92,7 @@ data class AuthToken(
     @SerializedName("secretInvalid") val secretInvalid: Boolean = false,
     @SerializedName("deletedAt") val deletedAt: Long? = null,
     @SerializedName("lastUsedAt") val lastUsedAt: Long = 0L,
+    @SerializedName("usageCount") val usageCount: Int = 0,
     @SerializedName("sortOrder") val sortOrder: Int = 0,
     @SerializedName("schemaVersion") val schemaVersion: Int = CURRENT_VAULT_SCHEMA_VERSION
 ) {
@@ -105,7 +106,7 @@ data class AuthToken(
             TokenType.STEAM -> 5
             else -> if (digits == 8) 8 else 6
         }
-        val safePeriod = if (period in 15..120) period else 30
+        val safePeriod = if (period in 5..300) period else 30
         val safeAlgo = when ((algorithm ?: "SHA1").trim().uppercase(Locale.US)) {
             "SHA256", "SHA-256", "HMACSHA256" -> "SHA256"
             "SHA512", "SHA-512", "HMACSHA512" -> "SHA512"
@@ -125,6 +126,8 @@ data class AuthToken(
             type = safeType,
             tagIds = (tagIds ?: emptyList()).filterNotNull(),
             note = note ?: "",
+            lastUsedAt = lastUsedAt.coerceAtLeast(0L),
+            usageCount = usageCount.coerceAtLeast(0),
             schemaVersion = CURRENT_VAULT_SCHEMA_VERSION
         )
     }
@@ -178,5 +181,8 @@ data class VaultPreferences(
     @SerializedName("themeMode") val themeMode: ThemeMode = ThemeMode.SYSTEM,
     @SerializedName("autoLockTimeout") val autoLockTimeout: AutoLockTimeout = AutoLockTimeout.SECONDS_30,
     @SerializedName("expandedIssuerKeys") val expandedIssuerKeys: Map<String, Set<String>> = emptyMap(),
-    @SerializedName("lastActiveWorkspaceId") val lastActiveWorkspaceId: String = "all"
+    @SerializedName("lastActiveWorkspaceId") val lastActiveWorkspaceId: String = "all",
+    @SerializedName("privacyMaskEnabled") val privacyMaskEnabled: Boolean = false,
+    @SerializedName("lastBackupAtMillis") val lastBackupAtMillis: Long? = null,
+    @SerializedName("lastBackupTokenCount") val lastBackupTokenCount: Int = 0
 )

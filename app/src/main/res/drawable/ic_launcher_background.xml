@@ -3,16 +3,17 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- Deep Marine Slate canvas -->
     <path
-        android:fillColor="#090D16"
-        android:pathData="M0,0h108v108h-108z"/>
-    <!-- 钛青深邃质感圆底 -->
+        android:fillColor="#0B111E"
+        android:pathData="M0,0h108v108h-108z" />
+    <!-- Subtle elevated vault disc -->
     <path
-        android:fillColor="#131B2E"
-        android:pathData="M54,12 C77.196,12 96,30.804 96,54 C96,77.196 77.196,96 54,96 C30.804,96 12,77.196 12,54 C12,30.804 30.804,12 54,12 Z"/>
-    <!-- 微光外边框 -->
+        android:fillColor="#111A2B"
+        android:pathData="M54,14 C76.091,14 94,31.909 94,54 C94,76.091 76.091,94 54,94 C31.909,94 14,76.091 14,54 C14,31.909 31.909,14 54,14 Z" />
+    <!-- Precision hairline border -->
     <path
-        android:strokeColor="#223254"
-        android:strokeWidth="1.5"
-        android:pathData="M54,12 C77.196,12 96,30.804 96,54 C96,77.196 77.196,96 54,96 C30.804,96 12,77.196 12,54 C12,30.804 30.804,12 54,12 Z"/>
+        android:strokeColor="#25344F"
+        android:strokeWidth="1.2"
+        android:pathData="M54,14 C76.091,14 94,31.909 94,54 C94,76.091 76.091,94 54,94 C31.909,94 14,76.091 14,54 C14,31.909 31.909,14 54,14 Z" />
 </vector>

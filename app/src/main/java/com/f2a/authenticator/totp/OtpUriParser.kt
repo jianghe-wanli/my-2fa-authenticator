@@ -20,12 +20,13 @@ object OtpUriParser {
     }
 
     private const val BASE32_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+    private const val MAX_URI_LENGTH = 8192
 
     // 仅识别末尾的约定白名单标记
     private val ENV_TRAILING_REGEX =
         Regex("""\s*[\[(](Prod|Dev|Test|Stage|生产|开发|测试|预发|灰度)[\])]\s*$""", RegexOption.IGNORE_CASE)
 
-    private fun normalizeBase32Secret(s: String): String =
+    fun normalizeBase32(s: String): String =
         s.trim()
             .replace("-", "")
             .replace(" ", "")
@@ -34,8 +35,8 @@ object OtpUriParser {
             .replace("=", "")
             .uppercase(Locale.US)
 
-    private fun isStrictBase32(s: String): Boolean {
-        val c = normalizeBase32Secret(s)
+    fun isStrictBase32Secret(s: String): Boolean {
+        val c = normalizeBase32(s)
         return c.length >= 8 && c.all { it in BASE32_CHARS } && OtpEngine.decodeBase32(c).isNotEmpty()
     }
 
@@ -47,7 +48,7 @@ object OtpUriParser {
 
     private fun safePeriod(p: Int?): Int {
         val v = p ?: 30
-        return if (v in 15..120) v else 30
+        return if (v in 10..300) v else 30
     }
 
     private fun normalizeAlgorithm(raw: String?): String? {
@@ -68,24 +69,31 @@ object OtpUriParser {
         if (cleanUri.isEmpty()) {
             return OtpParseResult.Error("输入内容为空")
         }
+        if (cleanUri.length > MAX_URI_LENGTH) {
+            return OtpParseResult.Error("输入内容过长（超过 $MAX_URI_LENGTH 字符上限）")
+        }
 
         if (cleanUri.startsWith("otpauth-migration://", ignoreCase = true)) {
             return OtpParseResult.Error("检测到 Google 迁移链接，请使用迁移导入")
         }
 
         if (!cleanUri.startsWith("otpauth://", ignoreCase = true)) {
-            // 容错：有些二维码或输入只有纯 Base32 密钥（严格校验字符集）
-            return if (isStrictBase32(cleanUri)) {
+            // 容错：有些二维码或输入只有纯 Base32 密钥（严格校验字符集与最小长度）
+            return if (isStrictBase32Secret(cleanUri)) {
                 OtpParseResult.Ok(
                     AuthToken(
                         issuer = "自定义凭据",
                         accountName = "默认账号",
-                        secret = normalizeBase32Secret(cleanUri)
+                        secret = normalizeBase32(cleanUri)
                     )
                 )
             } else {
                 OtpParseResult.Error("无效的 OTP 链接或 Base32 密钥")
             }
+        }
+
+        if (cleanUri.contains('\n') || cleanUri.contains('\r')) {
+            return OtpParseResult.Error("检测到多行内容，请改用批量文本导入")
         }
 
         return try {
@@ -106,28 +114,33 @@ object OtpUriParser {
             val rawPath = if (slashIdx >= 0) authorityAndPath.substring(slashIdx + 1) else ""
             val decodedPath = percentDecodePreservingPlus(rawPath).trim()
 
-            var issuerFromPath = ""
-            var accountName = decodedPath
-            if (decodedPath.contains(":")) {
-                val parts = decodedPath.split(":", limit = 2)
-                issuerFromPath = parts[0].trim()
-                accountName = parts[1].trim()
-            }
-
             val query = parseQueryParams(rawQuery)
             val rawSecret = query["secret"]
             if (rawSecret.isNullOrBlank()) {
                 return OtpParseResult.Error("缺少 secret 参数")
             }
-            if (!isStrictBase32(rawSecret)) {
+            if (!isStrictBase32Secret(rawSecret)) {
                 return OtpParseResult.Error("secret 不是合法的 Base32 密钥")
             }
-            val secret = normalizeBase32Secret(rawSecret)
+            val secret = normalizeBase32(rawSecret)
 
             val algorithm = normalizeAlgorithm(query["algorithm"])
                 ?: return OtpParseResult.Error("不支持的哈希算法: ${query["algorithm"]}")
 
             val issuerParam = query["issuer"]?.trim()
+            var issuerFromPath = ""
+            var accountName = decodedPath
+            if (!issuerParam.isNullOrBlank() &&
+                decodedPath.startsWith("$issuerParam:", ignoreCase = true)
+            ) {
+                issuerFromPath = decodedPath.substring(0, issuerParam.length).trim()
+                accountName = decodedPath.substring(issuerParam.length + 1).trim()
+            } else if (decodedPath.contains(":")) {
+                val parts = decodedPath.split(":", limit = 2)
+                issuerFromPath = parts[0].trim()
+                accountName = parts[1].trim()
+            }
+
             val issuer = when {
                 !issuerParam.isNullOrBlank() -> issuerParam
                 issuerFromPath.isNotBlank() -> issuerFromPath
@@ -174,6 +187,41 @@ object OtpUriParser {
         }
     }
 
+    /**
+     * 将有效的本地凭据编码为标准 percent-encoded `otpauth://` URI（损坏或空密钥返回 null）。
+     */
+    fun buildOtpAuthUri(token: AuthToken): String? {
+        if (token.secretInvalid || token.secret.isBlank()) return null
+        val cleanSecret = normalizeBase32(token.secret)
+        if (!isStrictBase32Secret(cleanSecret)) return null
+
+        val typeStr = when (token.type) {
+            TokenType.HOTP -> "hotp"
+            TokenType.STEAM -> "steam"
+            TokenType.TOTP -> "totp"
+        }
+        val issuer = token.issuer.trim().ifBlank { "未知平台" }
+        val account = token.accountName.trim().ifBlank { "默认账号" }
+        val label = if (token.tenantEnv.isNotBlank()) {
+            "$issuer:$account [${token.tenantEnv.trim()}]"
+        } else {
+            "$issuer:$account"
+        }
+
+        val sb = StringBuilder()
+        sb.append("otpauth://").append(typeStr).append('/').append(percentEncode(label))
+        sb.append("?secret=").append(cleanSecret)
+        sb.append("&issuer=").append(percentEncode(issuer))
+        sb.append("&algorithm=").append(token.algorithm.uppercase(Locale.US))
+        sb.append("&digits=").append(if (token.type == TokenType.STEAM) 5 else safeDigits(token.digits))
+        if (token.type == TokenType.HOTP) {
+            sb.append("&counter=").append(token.counter.coerceAtLeast(0L))
+        } else {
+            sb.append("&period=").append(if (token.type == TokenType.STEAM) 30 else safePeriod(token.period))
+        }
+        return sb.toString()
+    }
+
     internal fun parseQueryParams(rawQuery: String): Map<String, String> {
         if (rawQuery.isBlank()) return emptyMap()
         val map = LinkedHashMap<String, String>()
@@ -215,4 +263,26 @@ object OtpUriParser {
         }
         return String(out.toByteArray(), StandardCharsets.UTF_8)
     }
+
+    private fun percentEncode(input: String): String {
+        val bytes = input.toByteArray(StandardCharsets.UTF_8)
+        val out = StringBuilder(bytes.size * 2)
+        for (b in bytes) {
+            val c = b.toInt() and 0xFF
+            val isUnreserved = (c in 'A'.code..'Z'.code) ||
+                (c in 'a'.code..'z'.code) ||
+                (c in '0'.code..'9'.code) ||
+                c == '-'.code || c == '_'.code || c == '.'.code || c == '~'.code
+            if (isUnreserved) {
+                out.append(c.toChar())
+            } else {
+                out.append('%')
+                out.append(HEX_DIGITS[(c ushr 4) and 0x0F])
+                out.append(HEX_DIGITS[c and 0x0F])
+            }
+        }
+        return out.toString()
+    }
+
+    private const val HEX_DIGITS = "0123456789ABCDEF"
 }

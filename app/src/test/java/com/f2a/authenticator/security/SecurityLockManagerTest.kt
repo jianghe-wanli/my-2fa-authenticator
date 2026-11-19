@@ -5,7 +5,11 @@ import android.content.ContextWrapper
 import android.content.SharedPreferences
 import android.content.pm.ApplicationInfo
 import com.f2a.authenticator.crypto.SecretCipher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -14,6 +18,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
+import java.util.Base64
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.PBEKeySpec
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class SecurityLockManagerTest {
@@ -160,7 +167,8 @@ class SecurityLockManagerTest {
             context = context,
             clock = clock,
             cipher = cipher,
-            cryptoDispatcher = UnconfinedTestDispatcher()
+            cryptoDispatcher = UnconfinedTestDispatcher(),
+            ioDispatcher = UnconfinedTestDispatcher()
         )
         return Triple(manager, clock, cipher)
     }
@@ -344,5 +352,133 @@ class SecurityLockManagerTest {
             .apply()
         assertFalse(manager.isPinConfigured())
         assertTrue(manager.isPinMissingAnomaly(hasStoredEncryptedTokens = false))
+    }
+
+    @Test
+    fun setupPin_rejectsExtendedWeakPatterns_whileAllowingExistingValidPins() = runTest {
+        val (manager, _, _) = createEnv()
+        assertEquals(PinConfigResult.WeakPin, manager.setupPin("112233"))
+        assertEquals(PinConfigResult.WeakPin, manager.setupPin("121212"))
+        assertEquals(PinConfigResult.WeakPin, manager.setupPin("123123"))
+        assertEquals(PinConfigResult.WeakPin, manager.setupPin("111222"))
+        assertEquals(PinConfigResult.WeakPin, manager.setupPin("123321"))
+        assertEquals(PinConfigResult.WeakPin, manager.setupPin("000001"))
+
+        assertEquals(PinConfigResult.Ok, manager.setupPin("258013", "741852"))
+        assertEquals(SecurityLockManager.VerifyResult.Success, manager.verifyPin("258013"))
+    }
+
+    @Test
+    fun verifyPin_remainsCompatibleWithLegacy100kHashFormat() = runTest {
+        val tempDir = Files.createTempDirectory("f2a-legacy-pin-test").toFile()
+        tempDir.deleteOnExit()
+        val context = FakeContext(tempDir)
+
+        val salt = ByteArray(32) { it.toByte() }
+        val spec = PBEKeySpec("482715".toCharArray(), salt, 100_000, 256)
+        val hash = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
+        spec.clearPassword()
+
+        context.getSharedPreferences("security_vault_guard", Context.MODE_PRIVATE)
+            .edit()
+            .putString("vault_master_pin_salt", Base64.getEncoder().encodeToString(salt))
+            .putString("vault_master_pin_hash", Base64.getEncoder().encodeToString(hash))
+            .putBoolean("vault_pin_configured_flag", true)
+            .commit()
+
+        val manager = SecurityLockManager(
+            context = context,
+            clock = FakeClock(),
+            cipher = FakeSecretCipher(),
+            cryptoDispatcher = UnconfinedTestDispatcher(),
+            ioDispatcher = UnconfinedTestDispatcher()
+        )
+
+        assertTrue(manager.verifyPin("000999") is SecurityLockManager.VerifyResult.WrongPin)
+        assertEquals(SecurityLockManager.VerifyResult.Success, manager.verifyPin("482715"))
+    }
+
+    @Test
+    fun onBiometricVerified_resetsFailedAttempts_andRejectsDuringLockoutOrDisabled() = runTest {
+        val (manager, clock, _) = createEnv()
+        assertEquals(PinConfigResult.Ok, manager.setupPin("258013"))
+
+        // 未启用生物识别时拒绝
+        assertFalse(manager.onBiometricVerified())
+
+        manager.setBiometricEnabled(true)
+        manager.verifyPin("999001")
+        manager.verifyPin("999002")
+        assertEquals(3, manager.getRemainingAttempts())
+
+        // 冷却前生物识别通过 -> 重置失败次数为满额 5 次
+        assertTrue(manager.onBiometricVerified())
+        assertEquals(5, manager.getRemainingAttempts())
+
+        // 连续错 3 次进入冷却期后，生物识别校验必须被拒绝
+        manager.verifyPin("999001")
+        manager.verifyPin("999002")
+        assertTrue(manager.verifyPin("999003") is SecurityLockManager.VerifyResult.LockedOut)
+        assertFalse(manager.onBiometricVerified())
+
+        // 冷却结束后可再次成功并归零计数
+        clock.elapsed += 30_000L
+        assertTrue(manager.onBiometricVerified())
+        assertEquals(5, manager.getRemainingAttempts())
+    }
+
+    @Test
+    fun onBeforeDestructListener_firesBeforeCipherDestroy() = runTest {
+        val tempDir = Files.createTempDirectory("f2a-order-test").toFile()
+        tempDir.deleteOnExit()
+        val context = FakeContext(tempDir)
+        val events = ArrayList<String>()
+        val cipher = object : SecretCipher {
+            override fun encrypt(plainText: String) = SecretCipher.EncryptResult.Ok(plainText)
+            override fun decrypt(cipherTextBase64: String) = SecretCipher.DecryptResult.Ok(cipherTextBase64)
+            override fun destroyMasterKey() {
+                events.add("destroyMasterKey")
+            }
+        }
+        val manager = SecurityLockManager(
+            context = context,
+            clock = FakeClock(),
+            cipher = cipher,
+            cryptoDispatcher = UnconfinedTestDispatcher(),
+            ioDispatcher = UnconfinedTestDispatcher()
+        )
+        manager.setOnBeforeDestructListener {
+            events.add("beforeDestruct")
+        }
+        assertEquals(PinConfigResult.Ok, manager.setupPin("258013", "741852"))
+
+        assertEquals(SecurityLockManager.VerifyResult.DuressTriggered, manager.verifyPin("741852"))
+        assertEquals(listOf("beforeDestruct", "destroyMasterKey"), events)
+    }
+
+    @Test
+    fun concurrentVerifyPin_doesNotLoseFailedAttempts() = runBlocking {
+        val tempDir = Files.createTempDirectory("f2a-concurrent-pin").toFile()
+        tempDir.deleteOnExit()
+        val context = FakeContext(tempDir)
+        val manager = SecurityLockManager(
+            context = context,
+            clock = FakeClock(),
+            cipher = FakeSecretCipher(),
+            cryptoDispatcher = Dispatchers.Default,
+            ioDispatcher = Dispatchers.Default
+        )
+        manager.setMaxAttempts(10)
+        assertEquals(PinConfigResult.Ok, manager.setupPin("258013"))
+
+        // 4 个并发错误尝试：第 1、2 次返回 WrongPin，第 3 次触发 30s 冷却锁，第 4 次命中 LockedOut 不再累加
+        val results = (1..4).map { idx ->
+            async(Dispatchers.Default) { manager.verifyPin("99900$idx") }
+        }.awaitAll()
+
+        assertEquals(4, results.size)
+        assertEquals(2, results.count { it is SecurityLockManager.VerifyResult.WrongPin })
+        assertEquals(2, results.count { it is SecurityLockManager.VerifyResult.LockedOut })
+        assertEquals(7, manager.getRemainingAttempts())
     }
 }

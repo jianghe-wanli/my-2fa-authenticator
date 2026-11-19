@@ -1,6 +1,9 @@
 package com.f2a.authenticator.ui.screens.detail
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -15,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -37,6 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -44,6 +49,7 @@ import androidx.compose.ui.window.Dialog
 import com.f2a.authenticator.data.model.AuthToken
 import com.f2a.authenticator.data.model.Tag
 import com.f2a.authenticator.data.model.Workspace
+import com.f2a.authenticator.ui.components.parseHexColor
 import com.f2a.authenticator.ui.theme.IconSize
 import com.f2a.authenticator.ui.theme.LocalSemanticColors
 import com.f2a.authenticator.ui.theme.Radius
@@ -75,20 +81,21 @@ fun EditTokenDialog(
     Dialog(onDismissRequest = onDismiss) {
         Card(
             shape = RoundedCornerShape(Radius.XL),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            colors = CardDefaults.cardColors(containerColor = semantic.surfaceElevated),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = Space.M)
+                .border(1.dp, semantic.borderSubtle, RoundedCornerShape(Radius.XL))
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = screenHeight * 0.9f)
+                    .heightIn(max = screenHeight * 0.88f)
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = Space.XXL, end = Space.S, top = Space.S),
+                        .padding(start = Space.XL, end = Space.S, top = Space.S),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
@@ -106,7 +113,7 @@ fun EditTokenDialog(
                         .weight(1f, fill = false)
                         .verticalScroll(rememberScrollState())
                         .imePadding()
-                        .padding(horizontal = Space.XXL)
+                        .padding(horizontal = Space.XL)
                 ) {
                     OutlinedTextField(
                         value = editIssuer,
@@ -141,7 +148,7 @@ fun EditTokenDialog(
 
                     Spacer(modifier = Modifier.height(Space.M))
 
-                    Text("所属工作区", style = Type.BodyS, fontWeight = FontWeight.Bold)
+                    Text("所属工作区", style = Type.BodyS, fontWeight = FontWeight.SemiBold)
                     FlowRow(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -150,9 +157,18 @@ fun EditTokenDialog(
                         verticalArrangement = Arrangement.spacedBy(Space.XS)
                     ) {
                         allWorkspaces.forEach { ws ->
+                            val wsColor = remember(ws.colorHex) { parseHexColor(ws.colorHex) }
                             FilterChip(
                                 selected = editWorkspaceId == ws.id,
                                 onClick = { editWorkspaceId = ws.id },
+                                leadingIcon = {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(7.dp)
+                                            .clip(CircleShape)
+                                            .background(wsColor)
+                                    )
+                                },
                                 label = { Text(ws.name) }
                             )
                         }
@@ -160,7 +176,7 @@ fun EditTokenDialog(
 
                     Spacer(modifier = Modifier.height(Space.S))
 
-                    Text("分配标签", style = Type.BodyS, fontWeight = FontWeight.Bold)
+                    Text("分配标签", style = Type.BodyS, fontWeight = FontWeight.SemiBold)
                     FlowRow(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -170,10 +186,19 @@ fun EditTokenDialog(
                     ) {
                         allTags.forEach { tag ->
                             val isSel = editTagIds.contains(tag.id)
+                            val tagColor = remember(tag.colorHex) { parseHexColor(tag.colorHex) }
                             FilterChip(
                                 selected = isSel,
                                 onClick = {
                                     editTagIds = if (isSel) editTagIds - tag.id else editTagIds + tag.id
+                                },
+                                leadingIcon = {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(7.dp)
+                                            .clip(CircleShape)
+                                            .background(tagColor)
+                                    )
                                 },
                                 label = { Text(tag.name) }
                             )
@@ -204,10 +229,10 @@ fun EditTokenDialog(
                     if (validationError.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(Space.XS))
                         Text(
-                            text = "⚠ $validationError",
+                            text = validationError,
                             color = semantic.errorText,
                             style = Type.BodyS,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.SemiBold
                         )
                     }
 
@@ -218,7 +243,7 @@ fun EditTokenDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
-                        .padding(horizontal = Space.XXL, vertical = Space.M),
+                        .padding(horizontal = Space.XL, vertical = Space.M),
                     horizontalArrangement = Arrangement.End
                 ) {
                     TextButton(

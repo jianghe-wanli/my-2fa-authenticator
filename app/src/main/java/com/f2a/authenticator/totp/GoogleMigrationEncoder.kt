@@ -32,7 +32,7 @@ object GoogleMigrationEncoder {
         return tokens.filter { t ->
             t.secretInvalid ||
                 t.type == TokenType.STEAM ||
-                t.digits !in 6..8 ||
+                t.digits !in setOf(6, 8) ||
                 OtpEngine.decodeBase32(t.secret).isEmpty()
         }
     }

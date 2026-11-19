@@ -157,4 +157,43 @@ class GoogleMigrationCodecTest {
         val badBatch = GoogleMigrationDecoder.decodeBatch("otpauth-migration://offline?data=$badWireB64", "ws_bad")
         assertTrue(badBatch.tokens.isEmpty())
     }
+
+    @Test
+    fun md5AlgorithmRejected_sevenDigitsFlaggedIncompatible_andCaseInsensitiveIssuerPrefix() {
+        // 1. 7 位凭据必须被拦截为不兼容（不得静默降级为 6 位）
+        val sevenDigit = AuthToken(id = "d7", issuer = "Bank", accountName = "u", secret = "JBSWY3DPEHPK3PXP", digits = 7)
+        val plan = GoogleMigrationEncoder.buildExportPlan(listOf(sevenDigit))
+        assertEquals(0, plan.exportedCount)
+        assertEquals(1, plan.skippedIncompatibleTokens.size)
+
+        // 2. MD5 算法 (algoVal = 4) 应跳过并计入 skippedUnsupportedCount，而非静默按 SHA1 导入
+        val paramOut = ByteArrayOutputStream()
+        val secretBytes = OtpEngine.decodeBase32("JBSWY3DPEHPK3PXP")
+        paramOut.write((1 shl 3) or 2); paramOut.write(secretBytes.size); paramOut.write(secretBytes)
+        val nameBytes = "github:alice@x.com".toByteArray(StandardCharsets.UTF_8)
+        paramOut.write((2 shl 3) or 2); paramOut.write(nameBytes.size); paramOut.write(nameBytes)
+        val issuerBytes = "GitHub".toByteArray(StandardCharsets.UTF_8)
+        paramOut.write((3 shl 3) or 2); paramOut.write(issuerBytes.size); paramOut.write(issuerBytes)
+        paramOut.write((4 shl 3) or 0); paramOut.write(4) // MD5
+        val md5Param = paramOut.toByteArray()
+
+        // 另附一个合法 SHA1 + 大小写不同前缀 ("github:alice@x.com", issuer="GitHub")
+        val validParamOut = ByteArrayOutputStream()
+        validParamOut.write((1 shl 3) or 2); validParamOut.write(secretBytes.size); validParamOut.write(secretBytes)
+        validParamOut.write((2 shl 3) or 2); validParamOut.write(nameBytes.size); validParamOut.write(nameBytes)
+        validParamOut.write((3 shl 3) or 2); validParamOut.write(issuerBytes.size); validParamOut.write(issuerBytes)
+        validParamOut.write((4 shl 3) or 0); validParamOut.write(1) // SHA1
+        val validParam = validParamOut.toByteArray()
+
+        val payloadOut = ByteArrayOutputStream()
+        payloadOut.write((1 shl 3) or 2); payloadOut.write(md5Param.size); payloadOut.write(md5Param)
+        payloadOut.write((1 shl 3) or 2); payloadOut.write(validParam.size); payloadOut.write(validParam)
+
+        val b64 = URLEncoder.encode(Base64.getEncoder().encodeToString(payloadOut.toByteArray()), "UTF-8")
+        val batch = GoogleMigrationDecoder.decodeBatch("otpauth-migration://offline/?data=$b64", "ws_1")
+        assertEquals(1, batch.tokens.size)
+        assertEquals(1, batch.skippedUnsupportedCount)
+        assertEquals("GitHub", batch.tokens.single().issuer)
+        assertEquals("alice@x.com", batch.tokens.single().accountName)
+    }
 }

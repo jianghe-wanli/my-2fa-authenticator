@@ -2,6 +2,7 @@ package com.f2a.authenticator.security
 
 import android.app.Activity
 import com.f2a.authenticator.data.model.AutoLockTimeout
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -37,12 +38,45 @@ class BackgroundLockMonitorTest {
         clock.elapsed += 35_000L
         assertTrue(monitor.checkAndConsumeShouldLock(AutoLockTimeout.SECONDS_30))
 
-        // 3. 5s 窗口内正常跳转到系统相册/SAF（触发 onStop），即使相册停留 60s 返回也不应锁屏
+        // 3. 5s 窗口内正常跳转到系统相册/SAF（触发 onStop），60s 内返回不应锁屏
         monitor.onActivityStarted(activity)
         monitor.suppressNextBackgroundLock()
         clock.elapsed += 200L
         monitor.onActivityStopped(activity)
         clock.elapsed += 60_000L
         assertFalse(monitor.checkAndConsumeShouldLock(AutoLockTimeout.IMMEDIATE))
+    }
+
+    @Test
+    fun suppressNextBackgroundLock_enforces90sMaxExemptionCap() {
+        val clock = MutableClock(10_000L)
+        val monitor = BackgroundLockMonitor(clock)
+        val activity = Activity()
+
+        monitor.onActivityStarted(activity)
+        monitor.suppressNextBackgroundLock()
+        clock.elapsed += 200L
+        monitor.onActivityStopped(activity)
+
+        // 超过 90 秒豁免上限后强制锁定
+        clock.elapsed += BackgroundLockMonitor.MAX_SUPPRESS_DURATION_MS
+        assertTrue(monitor.checkAndConsumeShouldLock(AutoLockTimeout.IMMEDIATE))
+    }
+
+    @Test
+    fun immediateTimeout_invokesLockHandlerImmediatelyOnStop() {
+        val clock = MutableClock(10_000L)
+        val monitor = BackgroundLockMonitor(clock)
+        val activity = Activity()
+        var lockCount = 0
+
+        monitor.setLockHandler(
+            timeoutProvider = { AutoLockTimeout.IMMEDIATE },
+            onLock = { lockCount++ }
+        )
+
+        monitor.onActivityStarted(activity)
+        monitor.onActivityStopped(activity)
+        assertEquals(1, lockCount)
     }
 }

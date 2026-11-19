@@ -280,4 +280,45 @@ class BackupManagerTest {
         assertTrue(ok.payload.workspaces.isEmpty())
         assertTrue(ok.payload.tags.isEmpty())
     }
+
+    @Test
+    fun evaluatePassphraseStrength_scoresBlankShortWeakMediumAndStrong() {
+        assertEquals(8, BackupManager.MIN_RECOMMENDED_PASSPHRASE_LENGTH)
+        assertEquals(0, BackupManager.evaluatePassphraseStrength(""))
+        assertEquals(0, BackupManager.evaluatePassphraseStrength("        "))
+        assertEquals(0, BackupManager.evaluatePassphraseStrength("abc1234"))
+        assertEquals(1, BackupManager.evaluatePassphraseStrength("abcdefgh"))
+        assertEquals(2, BackupManager.evaluatePassphraseStrength("abcd1234"))
+        assertEquals(3, BackupManager.evaluatePassphraseStrength("StrongPass#2026"))
+    }
+
+    @Test
+    fun export_rejectsBlankPassphrase_andImportRejectsOversizedOrTooShortBase32Secret() {
+        val payload = samplePayload()
+        val blankRes = BackupManager.exportEncryptedBackup(payload, "   ")
+        assertTrue(blankRes is BackupExportResult.Error)
+        assertEquals(BackupError.ENCRYPTION_FAILED, (blankRes as BackupExportResult.Error).error)
+
+        val oneCharSecretJson = """
+            {
+              "version": 2,
+              "workspaces": [],
+              "tags": [],
+              "tokens": [
+                {"issuer": "OneChar", "accountName": "u", "secret": "A"}
+              ]
+            }
+        """.trimIndent()
+        val b64 = buildRawJdf2(oneCharSecretJson, "passphrase123", iterations = 10_000)
+        val importOneChar = BackupManager.importEncryptedBackup(b64, "passphrase123")
+        assertTrue(importOneChar is BackupImportResult.Ok)
+        val ok = importOneChar as BackupImportResult.Ok
+        assertEquals(1, ok.skippedCorruptTokens)
+        assertTrue(ok.payload.tokens.isEmpty())
+
+        val oversized = "A".repeat(15 * 1024 * 1024 + 10)
+        val oversizedRes = BackupManager.importEncryptedBackup(oversized, "pass")
+        assertTrue(oversizedRes is BackupImportResult.Error)
+        assertEquals(BackupError.CORRUPT_FORMAT, (oversizedRes as BackupImportResult.Error).error)
+    }
 }

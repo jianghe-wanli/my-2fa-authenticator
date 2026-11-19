@@ -19,6 +19,10 @@ interface TokenVaultRepository {
     val trashedTokens: StateFlow<List<AuthToken>>
     /** 是否已完成解锁解密加载 */
     val isLoaded: StateFlow<Boolean>
+    /** 是否已被胁迫/自毁清空（供进入空库伪装态时结束加载指示） */
+    val isWiped: StateFlow<Boolean>
+    /** 主备数据文件均损坏且无法解析时置为 true（只读保护，禁止空库覆写磁盘） */
+    val vaultLoadCorrupted: StateFlow<Boolean>
 
     /** 仅检测磁盘是否存在已保存密文，不触发 KeyStore 解密（供未解锁时检测 PIN 被删篡改） */
     fun hasStoredEncryptedTokens(): Boolean
@@ -28,6 +32,9 @@ interface TokenVaultRepository {
 
     /** 后台锁定时清空内存明文与 encCache，不删除磁盘密文 */
     fun lockInMemory()
+
+    /** 非阻塞同步阻断后续写盘并清空内存明文（供自毁前同步回调使用） */
+    fun wipeInMemoryImmediate() {}
 
     /** 胁迫触发或自毁时立即同步清空内存 StateFlow 与 encCache，并永久禁止后续写盘 */
     suspend fun wipeInMemoryState()
@@ -71,6 +78,8 @@ interface VaultPreferencesRepository {
     fun setThemeMode(mode: ThemeMode)
     fun setAutoLockTimeout(timeout: AutoLockTimeout)
     fun setLastActiveWorkspaceId(workspaceId: String)
+    fun setPrivacyMaskEnabled(enabled: Boolean)
+    fun recordBackupCompleted(timestampMs: Long, tokenCount: Int)
 
     /** 按 workspaceId 隔离读取/更新某工作区下的展开分组 key 集合 */
     fun setGroupExpanded(workspaceId: String, issuerKey: String, expanded: Boolean)

@@ -3,6 +3,7 @@ package com.f2a.authenticator.crypto
 import com.f2a.authenticator.data.model.AuthToken
 import com.f2a.authenticator.data.model.BackupPayload
 import com.f2a.authenticator.data.model.CURRENT_VAULT_SCHEMA_VERSION
+import com.f2a.authenticator.totp.OtpEngine
 import com.google.gson.Gson
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
@@ -56,6 +57,10 @@ sealed class BackupImportResult {
  */
 object BackupManager {
 
+    const val MIN_RECOMMENDED_PASSPHRASE_LENGTH = 8
+    const val MAX_BACKUP_RAW_BYTES = 10 * 1024 * 1024
+    private const val MAX_BACKUP_BASE64_LENGTH = 15 * 1024 * 1024
+
     private const val TRANSFORMATION = "AES/GCM/NoPadding"
     private const val GCM_TAG_LENGTH = 128
     private const val GCM_TAG_BYTES = GCM_TAG_LENGTH / 8
@@ -74,6 +79,25 @@ object BackupManager {
 
     private val MAGIC_BYTES = MAGIC.toByteArray(StandardCharsets.US_ASCII)
     private val gson = Gson()
+
+    /**
+     * 评估备份口令强度等级：0 = 过短(<8)或纯空白，1 = 弱，2 = 中，3 = 强。
+     */
+    fun evaluatePassphraseStrength(passphrase: String): Int {
+        if (passphrase.isBlank() || passphrase.length < MIN_RECOMMENDED_PASSPHRASE_LENGTH) {
+            return 0
+        }
+        val hasDigit = passphrase.any { it.isDigit() }
+        val hasLower = passphrase.any { it.isLowerCase() }
+        val hasUpper = passphrase.any { it.isUpperCase() }
+        val hasSymbol = passphrase.any { !it.isLetterOrDigit() }
+        val charClasses = listOf(hasDigit, hasLower, hasUpper, hasSymbol).count { it }
+        return when {
+            passphrase.length >= 12 && charClasses >= 3 -> 3
+            charClasses >= 2 || passphrase.length >= 12 -> 2
+            else -> 1
+        }
+    }
 
     private fun deriveKey(passphrase: String, salt: ByteArray, iterations: Int): SecretKeySpec {
         val chars = passphrase.toCharArray()
@@ -98,7 +122,9 @@ object BackupManager {
             .replace("\r", "")
             .replace("=", "")
             .uppercase(Locale.US)
-        return cleaned.isNotEmpty() && cleaned.all { it in BASE32_CHARS }
+        return cleaned.isNotEmpty() &&
+            cleaned.all { it in BASE32_CHARS } &&
+            OtpEngine.decodeBase32(cleaned).isNotEmpty()
     }
 
     private fun startsWithMagic(raw: ByteArray): Boolean {
@@ -114,7 +140,7 @@ object BackupManager {
      * 自动过滤损坏令牌（secretInvalid == true）与回收站软删除令牌（deletedAt != null）。
      */
     fun exportEncryptedBackup(payload: BackupPayload, backupPassphrase: String): BackupExportResult {
-        if (backupPassphrase.isEmpty()) {
+        if (backupPassphrase.isBlank()) {
             return BackupExportResult.Error(BackupError.ENCRYPTION_FAILED, "备份口令不能为空")
         }
 
@@ -136,17 +162,19 @@ object BackupManager {
             tokens = exportableTokens.map { it.normalize() }
         )
 
+        var plainBytes: ByteArray? = null
         return try {
             val json = gson.toJson(sanitizedPayload)
+            plainBytes = json.toByteArray(StandardCharsets.UTF_8)
             val salt = ByteArray(SALT_LENGTH).also { SecureRandom().nextBytes(it) }
             val secretKey = deriveKey(backupPassphrase, salt, ITERATIONS)
 
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(Cipher.ENCRYPT_MODE, secretKey)
             val iv = cipher.iv
-            val encrypted = cipher.doFinal(json.toByteArray(StandardCharsets.UTF_8))
+            val encrypted = cipher.doFinal(plainBytes)
 
-            val out = ByteArrayOutputStream()
+            val out = ByteArrayOutputStream(HEADER_LENGTH_V2 + encrypted.size)
             out.write(MAGIC_BYTES)
             out.write(VERSION.toInt())
             out.write(ByteBuffer.allocate(4).putInt(ITERATIONS).array())
@@ -165,6 +193,8 @@ object BackupManager {
                 BackupError.ENCRYPTION_FAILED,
                 e.message ?: "加密备份失败"
             )
+        } finally {
+            plainBytes?.fill(0)
         }
     }
 
@@ -177,11 +207,18 @@ object BackupManager {
         if (trimmed.isEmpty()) {
             return BackupImportResult.Error(BackupError.EMPTY_PAYLOAD, "备份内容为空")
         }
+        if (trimmed.length > MAX_BACKUP_BASE64_LENGTH) {
+            return BackupImportResult.Error(BackupError.CORRUPT_FORMAT, "备份数据体积超出安全上限（最大 10MB）")
+        }
 
         val raw = try {
             Base64.getDecoder().decode(trimmed)
         } catch (_: IllegalArgumentException) {
             return BackupImportResult.Error(BackupError.INVALID_BASE64, "备份内容不是有效的 Base64 编码")
+        }
+
+        if (raw.size > MAX_BACKUP_RAW_BYTES) {
+            return BackupImportResult.Error(BackupError.CORRUPT_FORMAT, "备份数据体积超出安全上限（最大 10MB）")
         }
 
         return if (startsWithMagic(raw)) {
@@ -218,16 +255,20 @@ object BackupManager {
         offset += IV_LENGTH
         val cipherText = raw.copyOfRange(offset, raw.size)
 
+        var decryptedBytes: ByteArray? = null
         return try {
             val key = deriveKey(passphrase, salt, iterations)
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_LENGTH, iv))
-            val decryptedJson = String(cipher.doFinal(cipherText), StandardCharsets.UTF_8)
+            decryptedBytes = cipher.doFinal(cipherText)
+            val decryptedJson = String(decryptedBytes, StandardCharsets.UTF_8)
             validateAndSanitize(decryptedJson)
         } catch (_: AEADBadTagException) {
             BackupImportResult.Error(BackupError.WRONG_PASSPHRASE_OR_TAMPERED, "备份口令错误或备份数据已被篡改")
         } catch (e: Exception) {
             BackupImportResult.Error(BackupError.CORRUPT_FORMAT, e.message ?: "JDF2 解密失败")
+        } finally {
+            decryptedBytes?.fill(0)
         }
     }
 
@@ -238,6 +279,7 @@ object BackupManager {
         }
 
         var keyBytes: ByteArray? = null
+        var decryptedBytes: ByteArray? = null
         return try {
             val iv = ByteArray(IV_LENGTH)
             val cipherText = ByteArray(raw.size - IV_LENGTH)
@@ -250,7 +292,8 @@ object BackupManager {
 
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(GCM_TAG_LENGTH, iv))
-            val decryptedJson = String(cipher.doFinal(cipherText), StandardCharsets.UTF_8)
+            decryptedBytes = cipher.doFinal(cipherText)
+            val decryptedJson = String(decryptedBytes, StandardCharsets.UTF_8)
             validateAndSanitize(decryptedJson)
         } catch (_: AEADBadTagException) {
             BackupImportResult.Error(BackupError.WRONG_PASSPHRASE_OR_TAMPERED, "备份口令错误或备份数据已被篡改")
@@ -258,6 +301,7 @@ object BackupManager {
             BackupImportResult.Error(BackupError.CORRUPT_FORMAT, e.message ?: "旧版备份解密失败")
         } finally {
             keyBytes?.fill(0)
+            decryptedBytes?.fill(0)
         }
     }
 

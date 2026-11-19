@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.keyframes
@@ -64,11 +65,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.fragment.app.FragmentActivity
 import com.f2a.authenticator.security.PinConfigResult
 import com.f2a.authenticator.security.SecurityLockManager
@@ -174,28 +173,41 @@ fun SecurityLockScreen(
                 val warnAttempts = isConfigured && remainingAttempts <= 3
                 Box(
                     modifier = Modifier
-                        .size(IconSize.LockKey)
+                        .size(80.dp)
                         .clip(CircleShape)
                         .background(
                             if (warnAttempts || isLockedOut) {
-                                MaterialTheme.colorScheme.error.copy(alpha = 0.15f)
+                                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.45f)
                             } else {
-                                MaterialTheme.colorScheme.surfaceVariant
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
                             }
                         )
                         .border(
                             width = 1.dp,
-                            color = if (warnAttempts || isLockedOut) MaterialTheme.colorScheme.error else semantic.borderSubtle,
+                            color = if (warnAttempts || isLockedOut) {
+                                MaterialTheme.colorScheme.error.copy(alpha = 0.6f)
+                            } else {
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                            },
                             shape = CircleShape
                         ),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = if (warnAttempts || isLockedOut) Icons.Default.Warning else Icons.Default.Shield,
-                        contentDescription = "保险库已锁定",
-                        tint = if (warnAttempts || isLockedOut) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(IconSize.LockShield)
-                    )
+                    Box(
+                        modifier = Modifier
+                            .size(58.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surface)
+                            .border(1.dp, semantic.borderSubtle, CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (warnAttempts || isLockedOut) Icons.Default.Warning else Icons.Default.Shield,
+                            contentDescription = "保险库已锁定",
+                            tint = if (warnAttempts || isLockedOut) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(IconSize.LockShield)
+                        )
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(Space.XL))
@@ -206,8 +218,7 @@ fun SecurityLockScreen(
                     } else {
                         "极盾保险库"
                     },
-                    style = Type.TitleSection,
-                    fontWeight = FontWeight.Black,
+                    style = Type.TitlePage,
                     color = MaterialTheme.colorScheme.onBackground,
                     textAlign = TextAlign.Center
                 )
@@ -216,15 +227,15 @@ fun SecurityLockScreen(
 
                 Text(
                     text = when {
-                        !isConfigured -> "与手机锁屏彻底独立，离线 PBKDF2 硬件绑定"
+                        !isConfigured -> "与手机锁屏彻底独立 · 离线 PBKDF2 硬件绑定"
                         isLockedOut -> "多次尝试错误，防线冷却中：$lockoutSeconds 秒"
-                        remainingAttempts <= 3 -> "⚠️ 严重警告：仅剩 $remainingAttempts 次尝试机会！继续错误将触发物理自毁！"
-                        else -> "请输入 6 位专属密码解锁你的 2FA 凭据"
+                        remainingAttempts <= 3 -> "警告：仅剩 $remainingAttempts 次尝试机会，继续错误将触发物理自毁"
+                        else -> "请输入 6 位专属密码解锁您的 2FA 凭据"
                     },
                     style = Type.BodyM,
                     color = if (warnAttempts || isLockedOut) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
-                    fontWeight = if (warnAttempts || isLockedOut) FontWeight.Bold else FontWeight.Normal,
+                    fontWeight = if (warnAttempts || isLockedOut) FontWeight.SemiBold else FontWeight.Normal,
                     modifier = Modifier.padding(horizontal = Space.L)
                 )
 
@@ -232,10 +243,15 @@ fun SecurityLockScreen(
                     Spacer(modifier = Modifier.height(Space.M))
                     Card(
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                        shape = RoundedCornerShape(Radius.M)
+                        shape = RoundedCornerShape(Radius.M),
+                        modifier = Modifier.border(
+                            1.dp,
+                            MaterialTheme.colorScheme.error.copy(alpha = 0.4f),
+                            RoundedCornerShape(Radius.M)
+                        )
                     ) {
                         Text(
-                            text = "⚠ 检测到本地已有加密凭据但主密码配置缺失，请立即设置新主密码以保护数据安全。",
+                            text = "检测到本地已有加密凭据但主密码配置缺失，请立即设置新主密码以保护数据安全。",
                             style = Type.BodyS,
                             color = MaterialTheme.colorScheme.onErrorContainer,
                             modifier = Modifier.padding(Space.M)
@@ -249,7 +265,7 @@ fun SecurityLockScreen(
                         text = errorMessage,
                         color = semantic.errorText,
                         style = Type.BodyS,
-                        fontWeight = FontWeight.Bold,
+                        fontWeight = FontWeight.SemiBold,
                         textAlign = TextAlign.Center
                     )
                 }
@@ -268,14 +284,28 @@ fun SecurityLockScreen(
                 ) {
                     repeat(6) { index ->
                         val filled = index < currentLength
+                        val dotScale by animateFloatAsState(
+                            targetValue = if (filled) 1.15f else 1f,
+                            animationSpec = tween(durationMillis = Motion.fast, easing = Motion.EaseStandard),
+                            label = "pin_dot_scale"
+                        )
+                        val dotColor by animateColorAsState(
+                            targetValue = if (filled) activeColor else Color.Transparent,
+                            animationSpec = tween(durationMillis = Motion.fast),
+                            label = "pin_dot_color"
+                        )
                         Box(
                             modifier = Modifier
                                 .size(Space.ML)
+                                .graphicsLayer {
+                                    scaleX = dotScale
+                                    scaleY = dotScale
+                                }
                                 .clip(CircleShape)
-                                .background(if (filled) activeColor else Color.Transparent)
+                                .background(dotColor)
                                 .border(
                                     width = 1.5.dp,
-                                    color = if (filled) activeColor else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                                    color = if (filled) activeColor else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
                                     shape = CircleShape
                                 )
                         )
@@ -330,13 +360,17 @@ fun SecurityLockScreen(
                                     confirmPin += key
                                     if (confirmPin.length == 6) {
                                         if (inputPin == confirmPin) {
+                                            val candidate = inputPin
                                             isVerifying = true
-                                            onSetupPin(inputPin) { res ->
+                                            onSetupPin(candidate) { res ->
                                                 isVerifying = false
                                                 when (res) {
-                                                    is PinConfigResult.Ok -> Unit
+                                                    is PinConfigResult.Ok -> {
+                                                        inputPin = ""
+                                                        confirmPin = ""
+                                                    }
                                                     is PinConfigResult.WeakPin -> {
-                                                        errorMessage = "密码过于简单，请勿使用全同或连续数字"
+                                                        errorMessage = "密码过于简单，请勿使用全同、连续或重复模式数字"
                                                         inputPin = ""
                                                         confirmPin = ""
                                                         isSettingConfirmStep = false
@@ -371,7 +405,9 @@ fun SecurityLockScreen(
                                         isVerifying = false
                                         when (res) {
                                             is SecurityLockManager.VerifyResult.Success,
-                                            is SecurityLockManager.VerifyResult.DuressTriggered -> Unit
+                                            is SecurityLockManager.VerifyResult.DuressTriggered -> {
+                                                inputPin = ""
+                                            }
                                             is SecurityLockManager.VerifyResult.WrongPin -> {
                                                 errorMessage = "密码错误，还可尝试 ${res.remaining} 次"
                                                 inputPin = ""
@@ -434,9 +470,7 @@ fun SecurityLockScreen(
                                 ) {
                                     Text(
                                         text = key,
-                                        fontSize = 26.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        fontFamily = FontFamily.Monospace,
+                                        style = Type.KeypadDigit,
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
                                 }
@@ -462,7 +496,7 @@ fun SecurityLockScreen(
                             modifier = Modifier.size(IconSize.M)
                         )
                         Spacer(modifier = Modifier.width(Space.S))
-                        Text("指纹 / 面容解锁", style = Type.BodyM, fontWeight = FontWeight.Bold)
+                        Text("指纹 / 面容解锁", style = Type.BodyM, fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
@@ -480,10 +514,16 @@ private fun LockKey(
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
-        targetValue = if (pressed) 0.96f else 1f,
+        targetValue = if (pressed) 0.94f else 1f,
         animationSpec = tween(durationMillis = Motion.fast),
         label = "key_scale"
     )
+    val bgColor by animateColorAsState(
+        targetValue = if (pressed) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface,
+        animationSpec = tween(durationMillis = Motion.fast),
+        label = "key_bg"
+    )
+
     FilledTonalButton(
         onClick = onClick,
         enabled = enabled,
@@ -498,7 +538,7 @@ private fun LockKey(
         shape = CircleShape,
         contentPadding = PaddingValues(0.dp),
         colors = ButtonDefaults.filledTonalButtonColors(
-            containerColor = MaterialTheme.colorScheme.surface
+            containerColor = bgColor
         )
     ) {
         content()

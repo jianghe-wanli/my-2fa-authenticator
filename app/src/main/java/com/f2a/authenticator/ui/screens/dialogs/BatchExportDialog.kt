@@ -4,11 +4,13 @@ import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -27,6 +29,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.filled.ZoomOutMap
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -58,6 +61,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.SecureFlagPolicy
 import com.f2a.authenticator.security.SecurityLockManager
 import com.f2a.authenticator.totp.GoogleMigrationEncoder
 import com.f2a.authenticator.totp.MigrationExportPlan
@@ -77,12 +82,14 @@ import kotlinx.coroutines.launch
 @Composable
 fun BatchExportDialog(
     viewModel: BackupViewModel,
+    onDuressTriggered: () -> Unit = {},
     onSelfDestructed: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     val semantic = LocalSemanticColors.current
     val tokens by viewModel.tokens.collectAsState()
+    val selfDestructedEvent by viewModel.selfDestructedEvent.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val uiScope = rememberCoroutineScope()
 
@@ -96,6 +103,15 @@ fun BatchExportDialog(
     var currentBatchIndex by remember { mutableIntStateOf(0) }
     var currentQrBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var isRenderingQr by remember { mutableStateOf(false) }
+    var showFullScreenQr by remember { mutableStateOf(false) }
+
+    LaunchedEffect(selfDestructedEvent) {
+        if (selfDestructedEvent) {
+            inputPin = ""
+            onDismiss()
+            onSelfDestructed()
+        }
+    }
 
     LaunchedEffect(isAuthorized, tokens) {
         if (isAuthorized) {
@@ -117,23 +133,27 @@ fun BatchExportDialog(
 
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
 
-    Dialog(onDismissRequest = onDismiss) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn)
+    ) {
         Card(
             shape = RoundedCornerShape(Radius.XL),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            colors = CardDefaults.cardColors(containerColor = semantic.surfaceElevated),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = Space.M)
+                .border(1.dp, semantic.borderSubtle, RoundedCornerShape(Radius.XL))
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = screenHeight * 0.9f)
+                    .heightIn(max = screenHeight * 0.88f)
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = Space.XXL, end = Space.S, top = Space.S),
+                        .padding(start = Space.XL, end = Space.S, top = Space.S),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
@@ -151,7 +171,7 @@ fun BatchExportDialog(
                         .weight(1f, fill = false)
                         .verticalScroll(rememberScrollState())
                         .imePadding()
-                        .padding(horizontal = Space.XXL),
+                        .padding(horizontal = Space.XL),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     if (!isAuthorized) {
@@ -175,7 +195,7 @@ fun BatchExportDialog(
                         )
                         if (authError.isNotEmpty()) {
                             Spacer(modifier = Modifier.height(Space.HS))
-                            Text("⚠ $authError", color = semantic.errorText, style = Type.BodyS, fontWeight = FontWeight.Bold)
+                            Text(authError, color = semantic.errorText, style = Type.BodyS, fontWeight = FontWeight.SemiBold)
                         }
                         Spacer(modifier = Modifier.height(Space.S))
                     } else {
@@ -212,7 +232,7 @@ fun BatchExportDialog(
                                 text = "注意：有 $skippedCount 个令牌（Steam / 密钥损坏 / 空密钥）无法无损导出，已自动跳过。",
                                 style = Type.Caption,
                                 color = semantic.errorText,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.SemiBold
                             )
                         }
 
@@ -222,7 +242,7 @@ fun BatchExportDialog(
                                 text = "提示：有 $degradedCount 个非 30s 周期令牌，Google 迁移协议标准默认按 30s 周期解释。",
                                 style = Type.Caption,
                                 color = semantic.timerWarning,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.SemiBold
                             )
                         }
 
@@ -231,7 +251,7 @@ fun BatchExportDialog(
                         if (uris.isNotEmpty()) {
                             Card(
                                 shape = RoundedCornerShape(Radius.L),
-                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .border(1.dp, semantic.borderSubtle, RoundedCornerShape(Radius.L))
@@ -242,10 +262,12 @@ fun BatchExportDialog(
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .size(240.dp)
-                                            .clip(RoundedCornerShape(Radius.S))
+                                            .size(236.dp)
+                                            .clip(RoundedCornerShape(Radius.M))
                                             .background(Color.White)
-                                            .padding(Space.MS),
+                                            .border(1.dp, semantic.borderSubtle, RoundedCornerShape(Radius.M))
+                                            .clickable(enabled = currentQrBitmap != null) { showFullScreenQr = true }
+                                            .padding(Space.L),
                                         contentAlignment = Alignment.Center
                                     ) {
                                         val bmp = currentQrBitmap
@@ -253,21 +275,33 @@ fun BatchExportDialog(
                                             isRenderingQr -> CircularProgressIndicator(modifier = Modifier.size(IconSize.XL))
                                             bmp != null -> Image(
                                                 bitmap = bmp.asImageBitmap(),
-                                                contentDescription = "迁移二维码",
-                                                modifier = Modifier.size(220.dp)
+                                                contentDescription = "迁移二维码，点击放大",
+                                                modifier = Modifier.fillMaxSize()
                                             )
                                             else -> Icon(Icons.Default.QrCode2, contentDescription = "迁移二维码", modifier = Modifier.size(IconSize.Hero))
                                         }
                                     }
 
                                     Spacer(modifier = Modifier.height(Space.S))
-                                    Text(
-                                        text = "Google 迁移协议包 (第 ${currentBatchIndex + 1} / ${uris.size} 包)",
-                                        fontWeight = FontWeight.Bold,
-                                        style = Type.BodyS,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    Spacer(modifier = Modifier.height(Space.HS))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.ZoomOutMap,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(Space.XS))
+                                        Text(
+                                            text = "点击二维码全屏高对比展示 · 第 ${currentBatchIndex + 1}/${uris.size} 包",
+                                            fontWeight = FontWeight.SemiBold,
+                                            style = Type.BodyS,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(Space.XXS))
                                     Text(
                                         text = "单包上限 ${GoogleMigrationEncoder.MAX_TOKENS_PER_QR} 个，自动防拥挤优化",
                                         style = Type.Caption,
@@ -290,7 +324,7 @@ fun BatchExportDialog(
                                     ) {
                                         Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(IconSize.S))
                                         Spacer(modifier = Modifier.width(Space.HS))
-                                        Text("复制第 ${currentBatchIndex + 1} 包协议链接", style = Type.BodyS, fontWeight = FontWeight.Bold)
+                                        Text("复制第 ${currentBatchIndex + 1} 包协议链接", style = Type.BodyS, fontWeight = FontWeight.SemiBold)
                                     }
                                 }
                             }
@@ -308,7 +342,7 @@ fun BatchExportDialog(
                                         modifier = Modifier.size(Touch.MinTarget)
                                     ) { Icon(Icons.Default.ChevronLeft, contentDescription = "上一包") }
 
-                                    Text(text = "第 ${currentBatchIndex + 1} / ${uris.size} 包", style = Type.BodyS, fontWeight = FontWeight.Bold)
+                                    Text(text = "第 ${currentBatchIndex + 1} / ${uris.size} 包", style = Type.BodyS, fontWeight = FontWeight.SemiBold)
 
                                     IconButton(
                                         onClick = { currentBatchIndex = (currentBatchIndex + 1).coerceAtMost(uris.size - 1) },
@@ -328,14 +362,13 @@ fun BatchExportDialog(
                     }
                 }
 
-                // Snackbar 置于可滚区与 Footer 之间，永不遮挡底部按钮
                 SnackbarHost(hostState = snackbarHostState)
 
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
-                        .padding(horizontal = Space.XXL, vertical = Space.M),
+                        .padding(horizontal = Space.XL, vertical = Space.M),
                     horizontalArrangement = Arrangement.End
                 ) {
                     if (!isAuthorized) {
@@ -344,21 +377,27 @@ fun BatchExportDialog(
                         Button(
                             enabled = !isVerifying && inputPin.length == 6,
                             onClick = {
+                                val candidate = inputPin
                                 isVerifying = true
-                                viewModel.verifyPinForBatchExport(inputPin) { verify ->
+                                viewModel.verifyPinForBatchExport(candidate, context) { verify ->
                                     isVerifying = false
                                     when (verify) {
                                         is SecurityLockManager.VerifyResult.Success -> {
+                                            inputPin = ""
                                             isAuthorized = true
                                         }
                                         is SecurityLockManager.VerifyResult.DuressTriggered -> {
+                                            inputPin = ""
                                             onDismiss()
+                                            onDuressTriggered()
                                         }
                                         is SecurityLockManager.VerifyResult.SelfDestructed -> {
+                                            inputPin = ""
                                             onDismiss()
                                             onSelfDestructed()
                                         }
                                         else -> {
+                                            inputPin = ""
                                             authError = formatVerifyError(verify)
                                         }
                                     }
@@ -373,6 +412,48 @@ fun BatchExportDialog(
                             shape = RoundedCornerShape(Radius.M),
                             modifier = Modifier.heightIn(min = Touch.MinTarget)
                         ) { Text("完成") }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showFullScreenQr && currentQrBitmap != null) {
+        Dialog(
+            onDismissRequest = { showFullScreenQr = false },
+            properties = DialogProperties(
+                usePlatformDefaultWidth = false,
+                securePolicy = SecureFlagPolicy.SecureOn
+            )
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.88f))
+                    .clickable { showFullScreenQr = false }
+                    .padding(Space.XL),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    shape = RoundedCornerShape(Radius.XL),
+                    colors = CardDefaults.cardColors(containerColor = Color.White)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(Space.XL),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Image(
+                            bitmap = currentQrBitmap!!.asImageBitmap(),
+                            contentDescription = "高对比全屏迁移二维码",
+                            modifier = Modifier.size(300.dp)
+                        )
+                        Spacer(modifier = Modifier.height(Space.M))
+                        Text(
+                            text = "第 ${currentBatchIndex + 1} / ${(exportPlan?.uris?.size ?: 1)} 包 · 轻触任意位置关闭",
+                            style = Type.BodyS,
+                            color = Color(0xFF0F172A),
+                            fontWeight = FontWeight.Medium
+                        )
                     }
                 }
             }

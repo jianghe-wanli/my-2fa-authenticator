@@ -1,11 +1,17 @@
 package com.f2a.authenticator.data.local
 
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.SharedPreferences
+import android.content.pm.ApplicationInfo
 import com.f2a.authenticator.crypto.SecretCipher
 import com.f2a.authenticator.data.model.AuthToken
+import com.f2a.authenticator.data.model.Tag
 import com.f2a.authenticator.data.model.TokenType
 import com.f2a.authenticator.data.model.Workspace
 import com.f2a.authenticator.security.Clock
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -13,19 +19,30 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
+import java.nio.file.Files
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class TokenRepositoryTest {
 
     private class InMemoryVaultStorage(
         @Volatile var docJson: String? = null,
+        @Volatile var bakJson: String? = null,
         @Volatile var legacy: LegacyVaultSections? = null
     ) : VaultDocumentStorage {
         override fun readDocumentJson(): String? = docJson
+        override fun readBackupDocumentJson(): String? = bakJson
+        override fun hasAnyDocumentFile(): Boolean = !docJson.isNullOrBlank() || !bakJson.isNullOrBlank()
         override fun writeDocumentJson(json: String) {
+            if (!docJson.isNullOrBlank()) {
+                bakJson = docJson
+            }
             docJson = json
         }
         override fun hasLegacyTokens(): Boolean = !legacy?.tokensJson.isNullOrBlank()
@@ -39,9 +56,13 @@ class TokenRepositoryTest {
         val encryptCalls = AtomicInteger(0)
         val decryptCalls = AtomicInteger(0)
         @Volatile var failDecryptFor: Set<String> = emptySet()
+        val failAllEncrypts = AtomicBoolean(false)
 
         override fun encrypt(plainText: String): SecretCipher.EncryptResult {
             encryptCalls.incrementAndGet()
+            if (failAllEncrypts.get()) {
+                return SecretCipher.EncryptResult.Failed("transient keystore error")
+            }
             return SecretCipher.EncryptResult.Ok("ENC:$plainText")
         }
 
@@ -72,7 +93,6 @@ class TokenRepositoryTest {
         val clock = FakeClock()
         val dispatcher = UnconfinedTestDispatcher(testScheduler)
 
-        // 先写入一条密文到存储
         val seedRepo = TokenRepository(storage, cipher, clock, dispatcher, isDebugBuild = false)
         seedRepo.unlockAndLoad()
         seedRepo.addToken(AuthToken(id = "t1", issuer = "GitHub", accountName = "a@b.com", secret = "JBSWY3DPEHPK3PXP"))
@@ -113,7 +133,6 @@ class TokenRepositoryTest {
         assertTrue(repo.tags.value.isEmpty())
         assertFalse(repo.hasStoredEncryptedTokens())
 
-        // 胁迫清空后禁止写回磁盘或恢复内存状态
         repo.addToken(AuthToken(id = "t2", issuer = "Decoy", accountName = "x", secret = "JBSWY3DPEHPK3PXP"))
         repo.unlockAndLoad()
         assertTrue(repo.tokens.value.isEmpty())
@@ -145,6 +164,115 @@ class TokenRepositoryTest {
     }
 
     @Test
+    fun lockInMemory_racingWithConcurrentWrites_neverOverwritesDiskWithEmptyVault() = runBlocking {
+        val storage = InMemoryVaultStorage()
+        val cipher = FakeSecretCipher()
+        val clock = FakeClock()
+        val repo = TokenRepository(storage, cipher, clock, Dispatchers.IO, isDebugBuild = false)
+        repo.unlockAndLoad()
+
+        val initial = (1..20).map { i ->
+            AuthToken(id = "base_$i", issuer = "Svc$i", accountName = "u$i@x.com", secret = "JBSWY3DPEHPK3PXP")
+        }
+        repo.addTokens(initial)
+
+        // 并发写入与反复 lockInMemory() 竞争，绝不能写出仅含新增条目的空/半截库
+        coroutineScope {
+            val writer = launch(Dispatchers.Default) {
+                repeat(40) { idx ->
+                    repo.addTokensDedup(
+                        listOf(
+                            AuthToken(
+                                id = "race_$idx",
+                                issuer = "RaceSvc",
+                                accountName = "r$idx@x.com",
+                                secret = "JBSWY3DPEHPK3PXP"
+                            )
+                        )
+                    )
+                }
+            }
+            val locker = launch(Dispatchers.Default) {
+                repeat(10) {
+                    repo.lockInMemory()
+                }
+            }
+            writer.join()
+            locker.join()
+        }
+        repo.close()
+
+        val verifyRepo = TokenRepository(storage, cipher, clock, Dispatchers.IO, isDebugBuild = false)
+        verifyRepo.unlockAndLoad()
+        assertTrue(
+            "Existing 20 tokens must never be lost on lock/write race, actual=${verifyRepo.tokens.value.size}",
+            verifyRepo.tokens.value.size >= 20
+        )
+        assertTrue(verifyRepo.workspaces.value.isNotEmpty())
+        verifyRepo.close()
+    }
+
+    @Test
+    fun corruptPrimaryDocument_recoversFromBak_andDualCorruptEntersReadOnlyMode() = runTest {
+        val storage = InMemoryVaultStorage()
+        val cipher = FakeSecretCipher()
+        val clock = FakeClock()
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+
+        val seedRepo = TokenRepository(storage, cipher, clock, dispatcher, isDebugBuild = false)
+        seedRepo.unlockAndLoad()
+        seedRepo.addToken(AuthToken(id = "t1", issuer = "GitHub", accountName = "a@b.com", secret = "JBSWY3DPEHPK3PXP"))
+        seedRepo.addToken(AuthToken(id = "t2", issuer = "Google", accountName = "c@d.com", secret = "JBSWY3DPEHPK3PXP"))
+        seedRepo.close()
+
+        // 破坏主文件，保留有效 .bak -> 应自动从 .bak 恢复至少 1 条记录并自愈主文件
+        assertNotNull(storage.bakJson)
+        storage.docJson = "{CORRUPTED_JSON_TRUNCATED"
+
+        val recoveredRepo = TokenRepository(storage, cipher, clock, dispatcher, isDebugBuild = false)
+        recoveredRepo.unlockAndLoad()
+        assertFalse(recoveredRepo.vaultLoadCorrupted.value)
+        assertTrue(recoveredRepo.tokens.value.isNotEmpty())
+        recoveredRepo.close()
+
+        // 主备同时损坏 -> 置 vaultLoadCorrupted = true，且拒绝空库覆写磁盘
+        val corruptMarker = "{BOTH_CORRUPT"
+        storage.docJson = corruptMarker
+        storage.bakJson = "{ALSO_CORRUPT"
+        val corruptRepo = TokenRepository(storage, cipher, clock, dispatcher, isDebugBuild = false)
+        assertTrue(corruptRepo.hasStoredEncryptedTokens())
+        corruptRepo.unlockAndLoad()
+        assertTrue(corruptRepo.vaultLoadCorrupted.value)
+        assertTrue(corruptRepo.tokens.value.isEmpty())
+
+        corruptRepo.addToken(AuthToken(id = "new_1", issuer = "New", accountName = "x", secret = "JBSWY3DPEHPK3PXP"))
+        assertEquals(corruptMarker, storage.docJson)
+        corruptRepo.close()
+    }
+
+    @Test
+    fun encryptFailure_doesNotPublishOrOverwriteExistingDiskTokens() = runTest {
+        val storage = InMemoryVaultStorage()
+        val cipher = FakeSecretCipher()
+        val clock = FakeClock()
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+
+        val repo = TokenRepository(storage, cipher, clock, dispatcher, isDebugBuild = false)
+        repo.unlockAndLoad()
+        repo.addToken(AuthToken(id = "t1", issuer = "AWS", accountName = "root", secret = "JBSWY3DPEHPK3PXP"))
+        val savedJson = storage.docJson
+
+        cipher.failAllEncrypts.set(true)
+        repo.addToken(AuthToken(id = "t2", issuer = "Cloudflare", accountName = "ops", secret = "GEZDGNBVGY3TQOJQ"))
+
+        // 加密失败时绝不能将新明文写入磁盘，也不应使内存与磁盘分叉
+        assertEquals(savedJson, storage.docJson)
+        assertEquals(1, repo.tokens.value.size)
+        assertFalse(storage.docJson?.contains("GEZDGNBVGY3TQOJQ") == true)
+        repo.close()
+    }
+
+    @Test
     fun concurrentMutations_500OperationsAcross4Coroutines_noLostUpdates() = runBlocking {
         val storage = InMemoryVaultStorage()
         val cipher = FakeSecretCipher()
@@ -152,7 +280,6 @@ class TokenRepositoryTest {
         val repo = TokenRepository(storage, cipher, clock, Dispatchers.IO, isDebugBuild = false)
         repo.unlockAndLoad()
 
-        // 4 个协程共执行 500 次并发写（每协程 125 次 addToken）
         coroutineScope {
             repeat(4) { worker ->
                 launch(Dispatchers.Default) {
@@ -178,7 +305,6 @@ class TokenRepositoryTest {
         assertEquals(100, repo.tokens.value.count { it.isPinned })
         repo.close()
 
-        // 重新从磁盘加载校验完全一致
         val reloaded = TokenRepository(storage, cipher, clock, Dispatchers.IO, isDebugBuild = false)
         reloaded.unlockAndLoad()
         assertEquals(500, reloaded.tokens.value.size)
@@ -211,12 +337,10 @@ class TokenRepositoryTest {
         cipher.encryptCalls.set(0)
         val repo = TokenRepository(storage, cipher, clock, dispatcher, isDebugBuild = false)
         repo.unlockAndLoad()
-        // 仅更新 counter（密钥未变），预热缓存命中 -> 0 次 encrypt
         val first = repo.tokens.value.first()
         repo.updateToken(first.copy(counter = first.counter + 1))
         assertEquals(0, cipher.encryptCalls.get())
 
-        // 更新单条 secret -> 仅对这一条调用 1 次 encrypt（而非 200 次）
         repo.updateToken(first.copy(secret = "GEZDGNBVGY3TQOJQ"))
         assertEquals(1, cipher.encryptCalls.get())
         repo.close()
@@ -247,7 +371,6 @@ class TokenRepositoryTest {
         assertEquals(1, repo.tokens.value.size)
         assertEquals(1, repo.trashedTokens.value.size)
 
-        // 推进 7 天，触发自动清理
         clock.nowMs.addAndGet(TokenRepository.DEFAULT_TRASH_RETENTION_MS)
         repo.purgeExpiredTrash()
         assertTrue(repo.trashedTokens.value.isEmpty())
@@ -299,7 +422,6 @@ class TokenRepositoryTest {
 
     @Test
     fun gsonMissingFieldsAndCorruptSecret_normalizedWithoutNpe_andSecretInvalidNeverReEncrypted() = runTest {
-        // 构造缺失 tagIds/type/workspaceId/period 及含未知枚举 "FUTURE_ALGO" 的历史 JSON
         val legacyTokensJson = """
             [
               {
@@ -349,7 +471,6 @@ class TokenRepositoryTest {
         assertTrue(corruptToken.secretInvalid)
         assertEquals("RAW_CORRUPT_CIPHER", corruptToken.secret)
 
-        // 触发保存时，corruptToken 绝不能被二次加密
         cipher.encryptCalls.set(0)
         repo.togglePin("legacy_1")
         assertEquals(0, cipher.encryptCalls.get())
@@ -358,20 +479,30 @@ class TokenRepositoryTest {
     }
 
     @Test
-    fun advanceHotp_concurrentCallsNeverLoseIncrements() = runBlocking {
+    fun advanceHotp_concurrentCallsNeverLoseIncrements_andIgnoresTotp() = runBlocking {
         val storage = InMemoryVaultStorage()
         val cipher = FakeSecretCipher()
         val clock = FakeClock()
         val repo = TokenRepository(storage, cipher, clock, Dispatchers.IO, isDebugBuild = false)
         repo.unlockAndLoad()
-        repo.addToken(
-            AuthToken(
-                id = "hotp_1",
-                issuer = "GitHub",
-                accountName = "hotp@test.com",
-                secret = "JBSWY3DPEHPK3PXP",
-                type = TokenType.HOTP,
-                counter = 0L
+        repo.addTokens(
+            listOf(
+                AuthToken(
+                    id = "hotp_1",
+                    issuer = "GitHub",
+                    accountName = "hotp@test.com",
+                    secret = "JBSWY3DPEHPK3PXP",
+                    type = TokenType.HOTP,
+                    counter = 0L
+                ),
+                AuthToken(
+                    id = "totp_1",
+                    issuer = "Google",
+                    accountName = "totp@test.com",
+                    secret = "JBSWY3DPEHPK3PXP",
+                    type = TokenType.TOTP,
+                    counter = 0L
+                )
             )
         )
 
@@ -379,11 +510,73 @@ class TokenRepositoryTest {
             repeat(50) {
                 launch(Dispatchers.Default) {
                     repo.advanceHotp("hotp_1")
+                    repo.advanceHotp("totp_1")
                 }
             }
         }
 
-        assertEquals(50L, repo.tokens.value.single().counter)
+        assertEquals(50L, repo.tokens.value.first { it.id == "hotp_1" }.counter)
+        assertEquals(0L, repo.tokens.value.first { it.id == "totp_1" }.counter)
         repo.close()
+    }
+
+    @Test
+    fun deleteAllTags_staysEmptyOnReload_andDeleteWorkspaceMigratesTokens() = runTest {
+        val storage = InMemoryVaultStorage()
+        val cipher = FakeSecretCipher()
+        val clock = FakeClock()
+        val dispatcher = UnconfinedTestDispatcher(testScheduler)
+
+        val repo = TokenRepository(storage, cipher, clock, dispatcher, isDebugBuild = false)
+        repo.unlockAndLoad()
+        repo.addToken(
+            AuthToken(
+                id = "t1",
+                workspaceId = Workspace.DEFAULT_WORK.id,
+                issuer = "GitLab",
+                accountName = "dev",
+                secret = "JBSWY3DPEHPK3PXP",
+                tagIds = listOf(Tag.TAG_MAIN.id)
+            )
+        )
+
+        for (tag in repo.tags.value.toList()) {
+            repo.deleteTag(tag.id)
+        }
+        assertTrue(repo.tags.value.isEmpty())
+        assertTrue(repo.tokens.value.single().tagIds.isEmpty())
+
+        repo.deleteWorkspace(Workspace.DEFAULT_WORK.id)
+        assertEquals(Workspace.DEFAULT_PERSONAL.id, repo.tokens.value.single().workspaceId)
+        repo.close()
+
+        val reloaded = TokenRepository(storage, cipher, clock, dispatcher, isDebugBuild = false)
+        reloaded.unlockAndLoad()
+        assertTrue(reloaded.tags.value.isEmpty())
+        assertEquals(Workspace.DEFAULT_PERSONAL.id, reloaded.tokens.value.single().workspaceId)
+        reloaded.close()
+    }
+
+    @Test
+    fun fileVaultDocumentStorage_realFileAtomicWriteAndBakRecovery() {
+        val tempDir = Files.createTempDirectory("f2a-storage-test").toFile()
+        tempDir.deleteOnExit()
+        val fakeCtx = object : ContextWrapper(null) {
+            override fun getApplicationContext(): Context = this
+            override fun getFilesDir(): File = File(tempDir, "files").apply { mkdirs() }
+            override fun getSharedPreferences(name: String?, mode: Int): SharedPreferences =
+                throw UnsupportedOperationException()
+            override fun getApplicationInfo(): ApplicationInfo = ApplicationInfo()
+        }
+
+        val fileStorage = FileVaultDocumentStorage(fakeCtx)
+        fileStorage.writeDocumentJson("""{"version":1}""")
+        assertEquals("""{"version":1}""", fileStorage.readDocumentJson())
+        assertEquals(null, fileStorage.readBackupDocumentJson())
+
+        fileStorage.writeDocumentJson("""{"version":2}""")
+        assertEquals("""{"version":2}""", fileStorage.readDocumentJson())
+        assertEquals("""{"version":1}""", fileStorage.readBackupDocumentJson())
+        assertTrue(fileStorage.hasAnyDocumentFile())
     }
 }

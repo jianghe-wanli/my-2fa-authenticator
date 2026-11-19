@@ -2,6 +2,7 @@ package com.f2a.authenticator
 
 import android.graphics.Color
 import android.os.Bundle
+import android.view.View
 import android.view.WindowManager
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
@@ -25,7 +26,10 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.f2a.authenticator.data.model.ThemeMode
 import com.f2a.authenticator.di.AppContainer
@@ -54,7 +58,12 @@ class MainActivity : FragmentActivity() {
     private lateinit var appViewModel: AppViewModel
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+
+        // Tapjacking 防点击劫持：拦截被悬浮窗遮挡时的触控事件
+        window.decorView.filterTouchesWhenObscured = true
+        findViewById<View>(android.R.id.content)?.filterTouchesWhenObscured = true
 
         appContainer = (application as My2FAApplication).container
         appViewModel = ViewModelProvider(
@@ -72,6 +81,12 @@ class MainActivity : FragmentActivity() {
                 ThemeMode.DARK -> true
                 ThemeMode.LIGHT -> false
                 ThemeMode.SYSTEM -> systemDark
+            }
+
+            LaunchedEffect(shellState.selfDestructed) {
+                if (shellState.selfDestructed) {
+                    finishAndRemoveTask()
+                }
             }
 
             DisposableEffect(isDark) {
@@ -128,6 +143,13 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && ::appViewModel.isInitialized) {
+            appViewModel.onWindowFocusGained(this)
+        }
+    }
+
     private fun applyFlagSecure(enable: Boolean) {
         if (enable) {
             window.setFlags(
@@ -147,13 +169,16 @@ private fun UnlockedAppShell(
     onSelfDestructFinish: () -> Unit
 ) {
     val shellState by appViewModel.uiState.collectAsState()
+    val lockSessionCounter by appViewModel.lockSessionCounter.collectAsState()
+    val lifecycleOwner = LocalLifecycleOwner.current
 
     val application = androidx.compose.ui.platform.LocalContext.current.applicationContext as android.app.Application
     val homeViewModel: HomeViewModel = viewModel(
         factory = HomeViewModel.Factory(
             tokenRepository = container.tokenRepository,
             preferencesRepository = container.preferencesRepository,
-            securityManager = container.securityLockManager
+            securityManager = container.securityLockManager,
+            clock = container.clock
         )
     )
     val detailViewModel: DetailViewModel = viewModel(
@@ -176,12 +201,24 @@ private fun UnlockedAppShell(
     val homeState by homeViewModel.uiState.collectAsState()
     val settingsState by settingsViewModel.uiState.collectAsState()
 
-    // V2-UI-04：高频 100ms 时钟仅由 State 容器持有，通过 lambda 传入叶子组件 OtpTicker，父树 0 重组
+    // 锁屏/胁迫/自毁会话切换时同步清理搜索词、筛选、状态提示等临时界面状态
+    LaunchedEffect(lockSessionCounter) {
+        if (lockSessionCounter > 0L) {
+            homeViewModel.resetSessionUiState()
+            backupViewModel.resetSessionState()
+        }
+    }
+
+    // 高频 100ms 时钟仅在 STARTED 且处于需要读秒的 Home / Detail 路由时运行，后台与扫码/设置页零唤醒
+    val needsOtpClock = shellState.route is AppRoute.Home || shellState.route is AppRoute.Detail
     val nowMsState = remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            nowMsState.longValue = System.currentTimeMillis()
-            delay(100L)
+    LaunchedEffect(lifecycleOwner, needsOtpClock) {
+        if (!needsOtpClock) return@LaunchedEffect
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                nowMsState.longValue = System.currentTimeMillis()
+                delay(100L)
+            }
         }
     }
     val nowMsProvider: () -> Long = remember { { nowMsState.longValue } }
@@ -189,10 +226,10 @@ private fun UnlockedAppShell(
     AnimatedContent(
         targetState = shellState.route,
         transitionSpec = {
-            (fadeIn(tween(250, easing = Motion.EaseStandard)) +
-                slideInHorizontally(tween(250, easing = Motion.EaseStandard)) { full -> full / 16 }) togetherWith
-                (fadeOut(tween(250, easing = Motion.EaseStandard)) +
-                    slideOutHorizontally(tween(250, easing = Motion.EaseStandard)) { full -> -full / 16 })
+            (fadeIn(tween(Motion.slow, easing = Motion.EaseStandard)) +
+                slideInHorizontally(tween(Motion.slow, easing = Motion.EaseStandard)) { full -> full / 16 }) togetherWith
+                (fadeOut(tween(Motion.base, easing = Motion.EaseStandard)) +
+                    slideOutHorizontally(tween(Motion.base, easing = Motion.EaseStandard)) { full -> -full / 16 })
         },
         label = "page_transition"
     ) { target ->
@@ -242,6 +279,7 @@ private fun UnlockedAppShell(
                         settingsViewModel.setBiometricEnabled(enabled)
                         appViewModel.refreshAuthState()
                     },
+                    onSetPrivacyMask = { settingsViewModel.setPrivacyMaskEnabled(it) },
                     onSetThemeMode = { settingsViewModel.setThemeMode(it) },
                     onSetCollapsePolicy = { settingsViewModel.setCollapsePolicy(it) },
                     onSetAutoLockTimeout = { settingsViewModel.setAutoLockTimeout(it) },
@@ -249,6 +287,10 @@ private fun UnlockedAppShell(
                     onSetDuressPin = { master, duress, cb -> settingsViewModel.setDuressPin(master, duress, cb) },
                     onClearDuressPin = { master, cb -> settingsViewModel.clearDuressPin(master, cb) },
                     onVerifyAndClearAll = { pin, cb -> settingsViewModel.verifyAndClearAllTokens(pin, cb) },
+                    onDuressTriggered = {
+                        appViewModel.refreshAuthState()
+                        appViewModel.navigateTo(AppRoute.Home)
+                    },
                     onSelfDestructed = {
                         appViewModel.lockNow()
                         onSelfDestructFinish()
@@ -285,7 +327,9 @@ private fun UnlockedAppShell(
                         allTags = tags,
                         allWorkspaces = workspaces,
                         clipboardClearSeconds = detailViewModel.getClipboardClearSeconds(),
+                        privacyMaskedDefault = homeState.privacyMaskEnabled,
                         nowMsProvider = nowMsProvider,
+                        onBuildExportUri = { t -> detailViewModel.buildExportUri(t) },
                         onBack = { appViewModel.navigateTo(AppRoute.Home) },
                         onUpdateToken = { updated -> detailViewModel.updateToken(updated) },
                         onAdvanceHotp = { t -> detailViewModel.advanceHotp(t) },
@@ -308,12 +352,20 @@ private fun UnlockedAppShell(
                 MainHomeScreen(
                     uiState = homeState,
                     nowMsProvider = nowMsProvider,
+                    missingPinRecoveredNotice = shellState.missingPinRecoveredNotice,
+                    onDismissMissingPinNotice = { appViewModel.dismissMissingPinNotice() },
                     onSelectWorkspace = { wsId ->
-                        homeViewModel.setActiveWorkspaceId(wsId)
-                        appViewModel.setActiveWorkspaceId(wsId)
+                        if (homeState.activeWorkspaceId != wsId) {
+                            homeViewModel.setActiveWorkspaceId(wsId)
+                        }
+                        if (shellState.activeWorkspaceId != wsId) {
+                            appViewModel.setActiveWorkspaceId(wsId)
+                        }
                     },
                     onSetSearchExpanded = { homeViewModel.setSearchExpanded(it) },
                     onSearchQueryChange = { homeViewModel.setSearchQuery(it) },
+                    onClearSearch = { homeViewModel.clearSearch() },
+                    onTogglePrivacyMask = { homeViewModel.togglePrivacyMask() },
                     onSelectTagFilter = { homeViewModel.selectTagFilter(it) },
                     onClearFilters = { homeViewModel.clearFilters() },
                     onToggleExpandGroup = { homeViewModel.toggleGroupExpanded(it) },
@@ -328,6 +380,7 @@ private fun UnlockedAppShell(
                     onDeleteTag = { homeViewModel.deleteTag(it) },
                     onOpenAddDialog = { appViewModel.openModal(ActiveModal.AddToken) },
                     onOpenScanScreen = { appViewModel.navigateTo(AppRoute.Scan) },
+                    onOpenBackupDialog = { appViewModel.openModal(ActiveModal.Backup) },
                     onOpenSettingsScreen = {
                         settingsViewModel.refreshSecurityMeta()
                         appViewModel.navigateTo(AppRoute.Settings)
@@ -373,6 +426,11 @@ private fun UnlockedAppShell(
         ActiveModal.BatchExport -> {
             BatchExportDialog(
                 viewModel = backupViewModel,
+                onDuressTriggered = {
+                    appViewModel.refreshAuthState()
+                    appViewModel.closeModal()
+                    appViewModel.navigateTo(AppRoute.Home)
+                },
                 onSelfDestructed = {
                     appViewModel.lockNow()
                     onSelfDestructFinish()

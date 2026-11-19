@@ -66,7 +66,7 @@ fun AddTokenAdvancedSection(
         label = "adv_arrow"
     )
     Column(modifier = Modifier.fillMaxWidth()) {
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -76,7 +76,7 @@ fun AddTokenAdvancedSection(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f).padding(end = Space.S)) {
-                Text("高级选项（一般无需修改）", style = Type.BodyM, fontWeight = FontWeight.Bold)
+                Text("高级选项（一般无需修改）", style = Type.BodyM, fontWeight = FontWeight.SemiBold)
                 Text("类型 (TOTP/HOTP/Steam) · 算法 · 位数 · 周期", style = Type.BodyS, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Icon(
@@ -92,12 +92,12 @@ fun AddTokenAdvancedSection(
         AnimatedVisibility(
             visible = expanded,
             enter = expandVertically(tween(Motion.slow, easing = Motion.EaseStandard)) +
-                fadeIn(tween(Motion.slow, easing = Motion.EaseStandard)),
+                fadeIn(tween(Motion.base, easing = Motion.EaseStandard)),
             exit = shrinkVertically(tween(Motion.slow, easing = Motion.EaseStandard)) +
-                fadeOut(tween(Motion.slow, easing = Motion.EaseStandard))
+                fadeOut(tween(Motion.fast, easing = Motion.EaseStandard))
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
-                Text("令牌类型", style = Type.BodyS, fontWeight = FontWeight.Bold)
+                Text("令牌类型", style = Type.BodyS, fontWeight = FontWeight.SemiBold)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.S)) {
                     listOf(
                         TokenType.TOTP to "标准 TOTP",
@@ -114,7 +114,7 @@ fun AddTokenAdvancedSection(
 
                 if (selectedType != TokenType.STEAM) {
                     Spacer(modifier = Modifier.height(Space.S))
-                    Text("算法", style = Type.BodyS, fontWeight = FontWeight.Bold)
+                    Text("算法", style = Type.BodyS, fontWeight = FontWeight.SemiBold)
                     Row(horizontalArrangement = Arrangement.spacedBy(Space.S)) {
                         listOf("SHA1", "SHA256", "SHA512").forEach { alg ->
                             FilterChip(
@@ -126,7 +126,7 @@ fun AddTokenAdvancedSection(
                     }
 
                     Spacer(modifier = Modifier.height(Space.S))
-                    Text("位数", style = Type.BodyS, fontWeight = FontWeight.Bold)
+                    Text("位数", style = Type.BodyS, fontWeight = FontWeight.SemiBold)
                     Row(horizontalArrangement = Arrangement.spacedBy(Space.S)) {
                         listOf(6, 8).forEach { d ->
                             FilterChip(
@@ -140,7 +140,7 @@ fun AddTokenAdvancedSection(
 
                 if (selectedType == TokenType.TOTP) {
                     Spacer(modifier = Modifier.height(Space.S))
-                    Text("刷新周期 (秒)", style = Type.BodyS, fontWeight = FontWeight.Bold)
+                    Text("刷新周期 (秒)", style = Type.BodyS, fontWeight = FontWeight.SemiBold)
                     Row(horizontalArrangement = Arrangement.spacedBy(Space.S)) {
                         listOf(30, 60).forEach { p ->
                             FilterChip(
@@ -154,7 +154,7 @@ fun AddTokenAdvancedSection(
 
                 if (selectedType == TokenType.HOTP) {
                     Spacer(modifier = Modifier.height(Space.S))
-                    Text("初始计数 (counter)", style = Type.BodyS, fontWeight = FontWeight.Bold)
+                    Text("初始计数 (counter)", style = Type.BodyS, fontWeight = FontWeight.SemiBold)
                     OutlinedTextField(
                         value = selectedCounter.toString(),
                         onValueChange = { v -> v.toLongOrNull()?.coerceAtLeast(0L)?.let(onCounterChange) },

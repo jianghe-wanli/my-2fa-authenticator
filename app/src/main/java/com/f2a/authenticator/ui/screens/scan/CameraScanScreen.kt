@@ -1,6 +1,7 @@
 package com.f2a.authenticator.ui.screens.scan
 
 import android.Manifest
+import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
@@ -28,6 +29,7 @@ import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -71,14 +73,19 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -88,7 +95,11 @@ import com.f2a.authenticator.data.model.Workspace
 import com.f2a.authenticator.totp.GoogleMigrationDecoder
 import com.f2a.authenticator.totp.OtpUriParser
 import com.f2a.authenticator.totp.WorkspaceInferenceEngine
+import com.f2a.authenticator.ui.theme.CobaltPrimaryDark
 import com.f2a.authenticator.ui.theme.IconSize
+import com.f2a.authenticator.ui.theme.LocalSemanticColors
+import com.f2a.authenticator.ui.theme.NavyBg
+import com.f2a.authenticator.ui.theme.NavySurface
 import com.f2a.authenticator.ui.theme.Radius
 import com.f2a.authenticator.ui.theme.Space
 import com.f2a.authenticator.ui.theme.Touch
@@ -115,9 +126,21 @@ fun CameraScanScreen(
     onBatchTokensScanned: (List<AuthToken>, batchNotice: String?) -> Unit
 ) {
     val context = LocalContext.current
+    val view = LocalView.current
+    val semantic = LocalSemanticColors.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val snackbarHostState = remember { SnackbarHostState() }
     val uiScope = rememberCoroutineScope()
+
+    // 深色扫描页强制保持状态栏白色图标，退出时还原主题原状
+    DisposableEffect(view, semantic.isDark) {
+        val window = (context as? Activity)?.window
+        val controller = window?.let { WindowCompat.getInsetsController(it, view) }
+        controller?.isAppearanceLightStatusBars = false
+        onDispose {
+            controller?.isAppearanceLightStatusBars = !semantic.isDark
+        }
+    }
 
     val isDisposedRef = remember { AtomicBoolean(false) }
 
@@ -284,7 +307,7 @@ fun CameraScanScreen(
     }
 
     Scaffold(
-        containerColor = Color.Black,
+        containerColor = NavyBg,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
@@ -313,12 +336,12 @@ fun CameraScanScreen(
                         Icon(
                             imageVector = if (isTorchOn) Icons.Default.FlashOn else Icons.Default.FlashOff,
                             contentDescription = if (isTorchOn) "关闭手电筒" else "打开手电筒",
-                            tint = if (isTorchOn) MaterialTheme.colorScheme.primary else Color.White,
+                            tint = if (isTorchOn) CobaltPrimaryDark else Color.White,
                             modifier = Modifier.size(IconSize.L)
                         )
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Black.copy(alpha = 0.6f))
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = NavyBg.copy(alpha = 0.72f))
             )
         }
     ) { innerPadding ->
@@ -431,25 +454,32 @@ fun CameraScanScreen(
                 ) {
                     Text(
                         text = "将 2FA 二维码或 Google 迁移码置于框内",
-                        color = Color.White.copy(alpha = 0.9f),
+                        color = Color.White.copy(alpha = 0.92f),
                         style = Type.BodyS,
                         modifier = Modifier
-                            .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(Radius.S))
-                            .padding(horizontal = Space.M, vertical = Space.HS)
+                            .clip(RoundedCornerShape(Radius.Full))
+                            .background(NavySurface.copy(alpha = 0.78f))
+                            .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(Radius.Full))
+                            .padding(horizontal = Space.L, vertical = Space.HS)
                     )
                 }
 
+                // 底部深蓝半透明悬浮工具栏
                 Row(
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .padding(Space.XXL),
+                        .padding(horizontal = Space.XL, vertical = Space.XXL)
+                        .clip(RoundedCornerShape(Radius.XL))
+                        .background(NavySurface.copy(alpha = 0.85f))
+                        .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(Radius.XL))
+                        .padding(Space.M)
+                        .fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(Space.M)
                 ) {
                     OutlinedButton(
                         onClick = launchGalleryPicker,
                         colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = Color.Black.copy(alpha = 0.45f),
+                            containerColor = NavyBg.copy(alpha = 0.5f),
                             contentColor = Color.White
                         ),
                         shape = RoundedCornerShape(Radius.M),
@@ -459,14 +489,14 @@ fun CameraScanScreen(
                     ) {
                         Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(IconSize.S))
                         Spacer(modifier = Modifier.width(Space.XS))
-                        Text("相册选图", style = Type.BodyL)
+                        Text("相册选图", style = Type.BodyM, fontWeight = FontWeight.SemiBold)
                     }
 
                     Button(
                         onClick = handleManualInput,
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary
+                            containerColor = CobaltPrimaryDark,
+                            contentColor = Color(0xFF061836)
                         ),
                         shape = RoundedCornerShape(Radius.M),
                         modifier = Modifier
@@ -475,7 +505,7 @@ fun CameraScanScreen(
                     ) {
                         Icon(Icons.Default.Keyboard, contentDescription = null, modifier = Modifier.size(IconSize.S))
                         Spacer(modifier = Modifier.width(Space.XS))
-                        Text("手动输入", style = Type.BodyL)
+                        Text("手动输入", style = Type.BodyM, fontWeight = FontWeight.SemiBold)
                     }
                 }
             } else {

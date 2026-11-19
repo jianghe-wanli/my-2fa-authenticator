@@ -36,5 +36,8 @@ data class AppShellUiState(
     val activeWorkspaceId: String = "all",
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val flagSecureEnabled: Boolean = true,
-    val snackbarMessage: String? = null
+    val snackbarMessage: String? = null,
+    val vaultLoadCorrupted: Boolean = false,
+    val missingPinRecoveredNotice: Boolean = false,
+    val selfDestructed: Boolean = false
 )

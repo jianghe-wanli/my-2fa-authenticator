@@ -11,7 +11,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * 设计 Token 体系（纯 Kotlin 常量对象，零新依赖）。
+ * Precision Deep-Blue Vault 设计 Token 体系（4dp 基准网格 + 表格等宽数字 tnum）。
  */
 object Space {
     val XXS = 2.dp
@@ -34,8 +34,8 @@ object Radius {
     val XS = 6.dp
     val S = 10.dp
     val M = 12.dp
-    val L = 18.dp
-    val XL = 24.dp
+    val L = 16.dp
+    val XL = 22.dp
     val Full = 999.dp
 }
 
@@ -46,86 +46,135 @@ object IconSize {
     val L = 22.dp
     val XL = 24.dp
     val Hero = 48.dp
-    val LockShield = 36.dp
+    val LockShield = 34.dp
     val LockKey = 72.dp
 }
 
 object Type {
-    // 安全红线：详情页大字验证码 CodeHero = 48.sp (>= 44.sp)
+    // 详情页大字验证码（6 位标准 44.sp，8 位窄字距自适应 36.sp）
     val CodeHero = TextStyle(
         fontFamily = FontFamily.Monospace,
         fontFeatureSettings = "tnum",
-        fontWeight = FontWeight.Black,
-        fontSize = 48.sp,
-        lineHeight = 56.sp,
-        letterSpacing = 6.sp
+        fontWeight = FontWeight.Bold,
+        fontSize = 44.sp,
+        lineHeight = 52.sp,
+        letterSpacing = 3.sp
+    )
+
+    val CodeHeroCompact = TextStyle(
+        fontFamily = FontFamily.Monospace,
+        fontFeatureSettings = "tnum",
+        fontWeight = FontWeight.Bold,
+        fontSize = 36.sp,
+        lineHeight = 44.sp,
+        letterSpacing = 1.5.sp
     )
 
     val CodeRow = TextStyle(
         fontFamily = FontFamily.Monospace,
         fontFeatureSettings = "tnum",
-        fontWeight = FontWeight.Black,
-        fontSize = 26.sp,
-        lineHeight = 32.sp,
-        letterSpacing = 2.sp
+        fontWeight = FontWeight.Bold,
+        fontSize = 24.sp,
+        lineHeight = 30.sp,
+        letterSpacing = 1.5.sp
+    )
+
+    val CodeRowCompact = TextStyle(
+        fontFamily = FontFamily.Monospace,
+        fontFeatureSettings = "tnum",
+        fontWeight = FontWeight.Bold,
+        fontSize = 21.sp,
+        lineHeight = 26.sp,
+        letterSpacing = 0.5.sp
     )
 
     val CodeMonoS = TextStyle(
         fontFamily = FontFamily.Monospace,
+        fontFeatureSettings = "tnum",
         fontWeight = FontWeight.Bold,
-        fontSize = 12.sp,
+        fontSize = 11.5.sp,
         lineHeight = 14.sp
     )
 
-    val TitlePage = TextStyle(
-        fontWeight = FontWeight.Black,
-        fontSize = 22.sp,
-        lineHeight = 28.sp,
+    val AvatarHero = TextStyle(
+        fontWeight = FontWeight.Bold,
+        fontSize = 28.sp,
+        lineHeight = 32.sp,
         letterSpacing = 0.5.sp
     )
 
+    val AvatarCard = TextStyle(
+        fontWeight = FontWeight.Bold,
+        fontSize = 16.sp,
+        lineHeight = 20.sp,
+        letterSpacing = 0.5.sp
+    )
+
+    val KeypadDigit = TextStyle(
+        fontFamily = FontFamily.Monospace,
+        fontFeatureSettings = "tnum",
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 26.sp,
+        lineHeight = 30.sp
+    )
+
+    val TitlePage = TextStyle(
+        fontFeatureSettings = "tnum",
+        fontWeight = FontWeight.Bold,
+        fontSize = 21.sp,
+        lineHeight = 28.sp,
+        letterSpacing = 0.2.sp
+    )
+
     val TitleSection = TextStyle(
-        fontWeight = FontWeight.ExtraBold,
-        fontSize = 18.sp,
+        fontFeatureSettings = "tnum",
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 17.sp,
         lineHeight = 24.sp
     )
 
     val TitleCard = TextStyle(
-        fontWeight = FontWeight.ExtraBold,
-        fontSize = 16.sp,
+        fontFeatureSettings = "tnum",
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 15.5.sp,
         lineHeight = 22.sp,
-        letterSpacing = 0.2.sp
+        letterSpacing = 0.1.sp
     )
 
     val BodyL = TextStyle(
+        fontFeatureSettings = "tnum",
         fontWeight = FontWeight.Normal,
         fontSize = 15.sp,
         lineHeight = 22.sp
     )
 
     val BodyM = TextStyle(
+        fontFeatureSettings = "tnum",
         fontWeight = FontWeight.Medium,
         fontSize = 14.sp,
         lineHeight = 20.sp
     )
 
     val BodyS = TextStyle(
+        fontFeatureSettings = "tnum",
         fontWeight = FontWeight.Normal,
         fontSize = 12.sp,
         lineHeight = 16.sp
     )
 
     val Label = TextStyle(
-        fontWeight = FontWeight.Bold,
+        fontFeatureSettings = "tnum",
+        fontWeight = FontWeight.SemiBold,
         fontSize = 11.sp,
         lineHeight = 14.sp,
-        letterSpacing = 0.5.sp
+        letterSpacing = 0.3.sp
     )
 
     val Caption = TextStyle(
-        fontWeight = FontWeight.SemiBold,
-        fontSize = 10.sp,
-        lineHeight = 12.sp
+        fontFeatureSettings = "tnum",
+        fontWeight = FontWeight.Medium,
+        fontSize = 10.5.sp,
+        lineHeight = 13.sp
     )
 }
 
@@ -133,7 +182,7 @@ object Motion {
     const val instant = 0
     const val fast = 120
     const val base = 200
-    const val slow = 280
+    const val slow = 240
     const val errorShake = 320
     const val hold = 1500L
 

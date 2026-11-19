@@ -2,7 +2,10 @@ package com.f2a.authenticator.ui.screens.dialogs
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -49,6 +52,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -56,6 +60,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.SecureFlagPolicy
 import com.f2a.authenticator.ui.components.EmptyStateCompact
 import com.f2a.authenticator.ui.theme.IconSize
 import com.f2a.authenticator.ui.theme.LocalSemanticColors
@@ -112,32 +118,41 @@ fun BackupDialog(
         }
     }
 
-    val strengthHint = when {
-        passphrase.isEmpty() -> null
-        passphrase.length < 8 -> "口令强度：较弱（建议至少 8 位含字母与数字）" to semantic.errorText
-        passphrase.length < 12 || passphrase.all { it.isDigit() } -> "口令强度：中等" to semantic.timerWarning
-        else -> "口令强度：强" to semantic.success
+    val passphraseStrength = remember(passphrase) {
+        viewModel.evaluatePassphraseStrength(passphrase)
     }
+    val strengthMeta = when {
+        passphrase.isEmpty() -> null
+        passphraseStrength == 0 -> Triple(1, "口令过短（导出至少需要 8 位非空白字符）", semantic.errorText)
+        passphraseStrength == 1 -> Triple(2, "口令强度：较弱（建议混用大小写与数字/符号）", semantic.timerWarning)
+        passphraseStrength == 2 -> Triple(3, "口令强度：中等", semantic.timerNormal)
+        else -> Triple(4, "口令强度：强", semantic.success)
+    }
+    val canExportWithPassphrase = passphrase.isNotBlank() && passphraseStrength >= 1
 
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
 
-    Dialog(onDismissRequest = { if (!isBusy) onDismiss() }) {
+    Dialog(
+        onDismissRequest = { if (!isBusy) onDismiss() },
+        properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn)
+    ) {
         Card(
             shape = RoundedCornerShape(Radius.XL),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            colors = CardDefaults.cardColors(containerColor = semantic.surfaceElevated),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = Space.M)
+                .border(1.dp, semantic.borderSubtle, RoundedCornerShape(Radius.XL))
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = screenHeight * 0.9f)
+                    .heightIn(max = screenHeight * 0.88f)
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = Space.XXL, end = Space.S, top = Space.S),
+                        .padding(start = Space.XL, end = Space.S, top = Space.S),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("端到端加密灾备", style = Type.TitleSection, modifier = Modifier.weight(1f))
@@ -151,7 +166,7 @@ fun BackupDialog(
                         .weight(1f, fill = false)
                         .verticalScroll(rememberScrollState())
                         .imePadding()
-                        .padding(horizontal = Space.XXL)
+                        .padding(horizontal = Space.XL)
                 ) {
                     SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                         SegmentedButton(
@@ -189,9 +204,28 @@ fun BackupDialog(
                         shape = RoundedCornerShape(Radius.M)
                     )
 
-                    if (isExportMode && strengthHint != null) {
+                    if (isExportMode && strengthMeta != null) {
+                        val (activeSegments, label, barColor) = strengthMeta
+                        Spacer(modifier = Modifier.height(Space.S))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(Space.XS)
+                        ) {
+                            repeat(4) { idx ->
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(4.dp)
+                                        .clip(RoundedCornerShape(Radius.Full))
+                                        .background(
+                                            if (idx < activeSegments) barColor
+                                            else MaterialTheme.colorScheme.surfaceVariant
+                                        )
+                                )
+                            }
+                        }
                         Spacer(modifier = Modifier.height(Space.XS))
-                        Text(text = strengthHint.first, style = Type.Caption, color = strengthHint.second)
+                        Text(text = label, style = Type.Caption, color = barColor)
                     }
 
                     if (isExportMode) {
@@ -210,7 +244,7 @@ fun BackupDialog(
                             )
                             Spacer(modifier = Modifier.height(Space.M))
                             OutlinedButton(
-                                enabled = !isBusy && passphrase.isNotBlank(),
+                                enabled = !isBusy && canExportWithPassphrase,
                                 onClick = {
                                     onSuppressNextBackgroundLock()
                                     try {
@@ -262,21 +296,20 @@ fun BackupDialog(
                             text = statusMessage,
                             color = if (statusIsError) semantic.errorText else semantic.success,
                             style = Type.BodyS,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.SemiBold
                         )
                     }
 
                     Spacer(modifier = Modifier.height(Space.S))
                 }
 
-                // Snackbar 置于可滚区与 Footer 之间，永不遮挡底部按钮
                 SnackbarHost(hostState = snackbarHostState)
 
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
-                        .padding(horizontal = Space.XXL, vertical = Space.M),
+                        .padding(horizontal = Space.XL, vertical = Space.M),
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -291,7 +324,7 @@ fun BackupDialog(
                     ) { Text("关闭") }
                     Spacer(modifier = Modifier.width(Space.S))
                     Button(
-                        enabled = !isBusy && passphrase.isNotBlank() && (!isExportMode || tokens.isNotEmpty()),
+                        enabled = !isBusy && if (isExportMode) (canExportWithPassphrase && tokens.isNotEmpty()) else passphrase.isNotBlank(),
                         onClick = {
                             if (isExportMode) {
                                 viewModel.exportToClipboard(context, passphrase, showSnack)

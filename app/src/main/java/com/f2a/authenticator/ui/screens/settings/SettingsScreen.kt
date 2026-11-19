@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -35,6 +38,7 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -81,7 +85,7 @@ import com.f2a.authenticator.ui.theme.Touch
 import com.f2a.authenticator.ui.theme.Type
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(
     uiState: SettingsUiState,
@@ -93,6 +97,7 @@ fun SettingsScreen(
     onSetFlagSecure: (Boolean) -> Unit,
     onSetClipboardClearSeconds: (Int) -> Unit,
     onSetBiometricEnabled: (Boolean) -> Unit,
+    onSetPrivacyMask: (Boolean) -> Unit = {},
     onSetThemeMode: (ThemeMode) -> Unit,
     onSetCollapsePolicy: (CollapsePolicy) -> Unit,
     onSetAutoLockTimeout: (AutoLockTimeout) -> Unit,
@@ -100,6 +105,7 @@ fun SettingsScreen(
     onSetDuressPin: (String, String, (PinConfigResult) -> Unit) -> Unit,
     onClearDuressPin: (String, (PinConfigResult) -> Unit) -> Unit,
     onVerifyAndClearAll: (String, (SecurityLockManager.VerifyResult) -> Unit) -> Unit,
+    onDuressTriggered: () -> Unit = {},
     onSelfDestructed: () -> Unit = {},
     onExecuteSelfDestruct: () -> Unit,
     onAddWorkspace: (String) -> Unit,
@@ -114,6 +120,7 @@ fun SettingsScreen(
     val semantic = LocalSemanticColors.current
     val snackbarHostState = remember { SnackbarHostState() }
     val uiScope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
     val showSnack: (String) -> Unit = { msg ->
         uiScope.launch {
             snackbarHostState.currentSnackbarData?.dismiss()
@@ -157,15 +164,44 @@ fun SettingsScreen(
         }
     ) { innerPadding ->
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
-            contentPadding = PaddingValues(start = Space.L, end = Space.L, top = Space.MS, bottom = Space.X4L)
+            contentPadding = PaddingValues(start = Space.L, end = Space.L, top = Space.MS, bottom = Space.X4L),
+            verticalArrangement = Arrangement.spacedBy(Space.M)
         ) {
-            item(key = "sec_card") {
+            uiState.healthReport?.let { report ->
+                item(key = "health_card", contentType = "health_card") {
+                    VaultHealthCard(
+                        report = report,
+                        onAction = { actionKey ->
+                            when (actionKey) {
+                                "flag_secure" -> {
+                                    onSetFlagSecure(true)
+                                    showSnack("已开启防截屏与多任务遮罩")
+                                }
+                                "autolock", "clipboard" -> {
+                                    expandSecurity = true
+                                    uiScope.launch { listState.animateScrollToItem(1) }
+                                }
+                                "backup" -> onOpenBackup()
+                                "duress" -> showDuressDialog = true
+                                "privacy_mask" -> {
+                                    onSetPrivacyMask(true)
+                                    showSnack("已开启防肩窥默认打码")
+                                }
+                                "corrupted", "duplicates", "weak_secrets" -> onBack()
+                            }
+                        }
+                    )
+                }
+            }
+
+            item(key = "sec_card", contentType = "accordion_card") {
                 SettingsAccordionCard(
                     title = "安全与隐私",
-                    subtitle = "主密码 · 胁迫码 · 生物识别 · 自动锁定",
+                    subtitle = "主密码 · 胁迫码 · 生物识别 · 防窥与自动锁定",
                     icon = Icons.Default.Shield,
                     isExpanded = expandSecurity,
                     onToggle = { expandSecurity = !expandSecurity }
@@ -206,36 +242,53 @@ fun SettingsScreen(
                         }
                         SettingDivider()
 
+                        SettingRow(
+                            title = "默认防窥遮罩",
+                            description = "列表默认隐藏验证码明文，轻触可复制或临时揭示 10 秒"
+                        ) {
+                            Switch(
+                                checked = uiState.privacyMaskEnabled,
+                                onCheckedChange = {
+                                    onSetPrivacyMask(it)
+                                    showSnack(if (it) "已开启防窥遮罩模式" else "已关闭防窥遮罩模式")
+                                }
+                            )
+                        }
+                        SettingDivider()
+
                         Column(modifier = Modifier.padding(vertical = Space.M)) {
-                            Text("后台自动锁定超时", style = Type.BodyM, fontWeight = FontWeight.Bold)
+                            Text("后台自动锁定超时", style = Type.BodyM, fontWeight = FontWeight.SemiBold)
                             Spacer(modifier = Modifier.height(Space.S))
                             val timeouts = listOf(
                                 AutoLockTimeout.IMMEDIATE to "立即",
-                                AutoLockTimeout.SECONDS_30 to "30秒",
-                                AutoLockTimeout.SECONDS_60 to "1分",
-                                AutoLockTimeout.SECONDS_300 to "5分",
+                                AutoLockTimeout.SECONDS_30 to "30 秒",
+                                AutoLockTimeout.SECONDS_60 to "1 分钟",
+                                AutoLockTimeout.SECONDS_300 to "5 分钟",
                                 AutoLockTimeout.NEVER to "关闭"
                             )
-                            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                                timeouts.forEachIndexed { idx, (timeout, label) ->
-                                    SegmentedButton(
+                            FlowRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(Space.S),
+                                verticalArrangement = Arrangement.spacedBy(Space.XS)
+                            ) {
+                                timeouts.forEach { (timeout, label) ->
+                                    FilterChip(
                                         selected = uiState.autoLockTimeout == timeout,
                                         onClick = { onSetAutoLockTimeout(timeout) },
-                                        shape = SegmentedButtonDefaults.itemShape(index = idx, count = timeouts.size),
-                                        modifier = Modifier.heightIn(min = Touch.SegmentedHeight)
-                                    ) { Text(label, style = Type.Caption) }
+                                        label = { Text(label, style = Type.BodyS) }
+                                    )
                                 }
                             }
                         }
                         SettingDivider()
 
                         Column(modifier = Modifier.padding(vertical = Space.M)) {
-                            Text("自毁触发阈值", style = Type.BodyM, fontWeight = FontWeight.Bold)
+                            Text("自毁触发阈值", style = Type.BodyM, fontWeight = FontWeight.SemiBold)
                             Text(
                                 text = "连续错误 ${uiState.maxAttempts} 次即物理自毁",
                                 style = Type.BodyS,
                                 color = MaterialTheme.colorScheme.error,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.SemiBold
                             )
                             Spacer(modifier = Modifier.height(Space.S))
                             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
@@ -269,7 +322,7 @@ fun SettingsScreen(
                         SettingDivider()
 
                         Column(modifier = Modifier.padding(vertical = Space.M)) {
-                            Text("剪贴板自动清除时限", style = Type.BodyM, fontWeight = FontWeight.Bold)
+                            Text("剪贴板自动清除时限", style = Type.BodyM, fontWeight = FontWeight.SemiBold)
                             Spacer(modifier = Modifier.height(Space.S))
                             val options = listOf(30 to "30秒", 45 to "45秒", 60 to "60秒", 0 to "关闭")
                             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
@@ -293,15 +346,13 @@ fun SettingsScreen(
                         ) {
                             Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(IconSize.S))
                             Spacer(modifier = Modifier.width(Space.S))
-                            Text("立即锁定保险库", style = Type.BodyM, fontWeight = FontWeight.Bold)
+                            Text("立即锁定保险库", style = Type.BodyM, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
             }
 
-            item(key = "sp_1") { Spacer(modifier = Modifier.height(Space.ML)) }
-
-            item(key = "appearance_card") {
+            item(key = "appearance_card", contentType = "accordion_card") {
                 SettingsAccordionCard(
                     title = "界面与列表偏好",
                     subtitle = "深浅色主题 · 分类默认折叠策略",
@@ -310,7 +361,7 @@ fun SettingsScreen(
                     onToggle = { expandAppearance = !expandAppearance }
                 ) {
                     Column(modifier = Modifier.fillMaxWidth()) {
-                        Text("外观主题", style = Type.BodyM, fontWeight = FontWeight.Bold)
+                        Text("外观主题", style = Type.BodyM, fontWeight = FontWeight.SemiBold)
                         Spacer(modifier = Modifier.height(Space.S))
                         val themes = listOf(
                             ThemeMode.SYSTEM to "跟随系统",
@@ -332,7 +383,7 @@ fun SettingsScreen(
                         SettingDivider()
                         Spacer(modifier = Modifier.height(Space.M))
 
-                        Text("主页平台分组默认折叠策略", style = Type.BodyM, fontWeight = FontWeight.Bold)
+                        Text("主页平台分组默认折叠策略", style = Type.BodyM, fontWeight = FontWeight.SemiBold)
                         Spacer(modifier = Modifier.height(Space.S))
                         val policies = listOf(
                             CollapsePolicy.COLLAPSE_ALL to "默认全折叠",
@@ -353,9 +404,7 @@ fun SettingsScreen(
                 }
             }
 
-            item(key = "sp_2") { Spacer(modifier = Modifier.height(Space.ML)) }
-
-            item(key = "ws_card") {
+            item(key = "ws_card", contentType = "accordion_card") {
                 SettingsAccordionCard(
                     title = "工作区与标签",
                     subtitle = "${uiState.workspaces.size} 个工作区，${uiState.tags.size} 个标签",
@@ -369,7 +418,7 @@ fun SettingsScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("工作区列表", style = Type.BodyS, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                            Text("工作区列表", style = Type.BodyS, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
                             TextButton(onClick = { showAddWorkspaceDialog = true }) {
                                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(IconSize.XS))
                                 Spacer(modifier = Modifier.width(Space.XS))
@@ -386,7 +435,7 @@ fun SettingsScreen(
                                     .padding(horizontal = Space.M, vertical = Space.XS),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Box(modifier = Modifier.size(Space.S).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
+                                Box(modifier = Modifier.size(Space.S).clip(CircleShape).background(parseHexColor(ws.colorHex)))
                                 Spacer(modifier = Modifier.width(Space.MS))
                                 Text(text = ws.name, modifier = Modifier.weight(1f), style = Type.BodyM)
                                 IconButton(onClick = { workspaceToRename = ws }, modifier = Modifier.size(Touch.MinTarget)) {
@@ -406,7 +455,7 @@ fun SettingsScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("动态标签管理", style = Type.BodyS, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                            Text("动态标签管理", style = Type.BodyS, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
                             TextButton(onClick = { showAddTagDialog = true }) {
                                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(IconSize.XS))
                                 Spacer(modifier = Modifier.width(Space.XS))
@@ -436,9 +485,7 @@ fun SettingsScreen(
                 }
             }
 
-            item(key = "sp_3") { Spacer(modifier = Modifier.height(Space.ML)) }
-
-            item(key = "backup_card") {
+            item(key = "backup_card", contentType = "accordion_card") {
                 SettingsAccordionCard(
                     title = "数据备份、迁移与回收站",
                     subtitle = "Google 迁移 · 加密灾备 · 回收站 (${uiState.trashedItems.size})",
@@ -476,17 +523,16 @@ fun SettingsScreen(
                 }
             }
 
-            item(key = "danger_header") {
-                Spacer(modifier = Modifier.height(Space.XXL))
+            item(key = "danger_header", contentType = "section_header") {
                 Text(
                     text = "危险操作",
                     style = Type.Label,
                     color = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(start = Space.XS, bottom = Space.S)
+                    modifier = Modifier.padding(start = Space.XS, top = Space.M)
                 )
             }
 
-            item(key = "danger_card") {
+            item(key = "danger_card", contentType = "accordion_card") {
                 SettingsAccordionCard(
                     title = "危险区域",
                     subtitle = "一键清空 · 立即执行硬件级物理自毁",
@@ -506,13 +552,13 @@ fun SettingsScreen(
                             shape = RoundedCornerShape(Radius.M),
                             modifier = Modifier.fillMaxWidth().heightIn(min = Touch.MinTarget)
                         ) {
-                            Text("一键清除全部 2FA 凭据", fontWeight = FontWeight.Bold, style = Type.BodyL)
+                            Text("一键清除全部 2FA 凭据", fontWeight = FontWeight.SemiBold, style = Type.BodyL)
                         }
                         SettingDivider()
                         Text(
-                            text = "⚠ 此操作将注销硬件密钥并删除本地数据文件，不可恢复",
+                            text = "此操作将注销硬件密钥并删除本地数据文件，不可恢复",
                             style = Type.BodyS,
-                            fontWeight = FontWeight.Bold,
+                            fontWeight = FontWeight.SemiBold,
                             color = semantic.errorText
                         )
                         SelfDestructHoldButton(onHoldComplete = { showDestructInputDialog = true })
@@ -525,6 +571,7 @@ fun SettingsScreen(
     if (showChangePinDialog) {
         ChangeMasterPinDialog(
             onDismiss = { showChangePinDialog = false },
+            onDuressTriggered = onDuressTriggered,
             onSelfDestructed = onSelfDestructed,
             onChangePin = { cur, next, cb ->
                 onChangeMasterPin(cur, next) { res ->
@@ -539,6 +586,7 @@ fun SettingsScreen(
         ConfigureDuressPinDialog(
             hasDuressPin = uiState.hasDuressPin,
             onDismiss = { showDuressDialog = false },
+            onDuressTriggered = onDuressTriggered,
             onSelfDestructed = onSelfDestructed,
             onSetDuressPin = { master, duress, cb ->
                 onSetDuressPin(master, duress) { res ->
@@ -639,6 +687,7 @@ fun SettingsScreen(
     if (showConfirmClearDialog) {
         ConfirmClearTokensDialog(
             onDismiss = { showConfirmClearDialog = false },
+            onDuressTriggered = onDuressTriggered,
             onSelfDestructed = onSelfDestructed,
             onVerifyAndClear = { pin, cb ->
                 onVerifyAndClearAll(pin) { res ->

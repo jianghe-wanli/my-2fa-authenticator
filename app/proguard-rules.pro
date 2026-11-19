@@ -15,10 +15,13 @@
     public static ** valueOf(java.lang.String);
 }
 
-# Release 剥离非错误日志，防止信息泄露
+# Release 剥离非必要调试与警告日志，防止敏感信息泄露
 -assumenosideeffects class android.util.Log {
     public static boolean isLoggable(java.lang.String, int);
     public static int v(...);
     public static int d(...);
     public static int i(...);
+    public static int w(...);
+    public static int e(...);
+    public static int wtf(...);
 }

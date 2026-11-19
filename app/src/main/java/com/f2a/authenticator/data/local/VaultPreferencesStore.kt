@@ -12,6 +12,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.Locale
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
 
 internal interface PreferencesStorage {
     fun readJson(): String?
@@ -40,15 +43,31 @@ private class SharedPreferencesPrefStorage(context: Context) : PreferencesStorag
 }
 
 class VaultPreferencesStore private constructor(
-    private val storage: PreferencesStorage
+    private val storage: PreferencesStorage,
+    private val asyncPersist: Boolean
 ) : VaultPreferencesRepository {
 
-    constructor(context: Context) : this(SharedPreferencesPrefStorage(context))
+    constructor(context: Context) : this(
+        storage = SharedPreferencesPrefStorage(context),
+        asyncPersist = true
+    )
 
-    internal constructor(storage: PreferencesStorage, @Suppress("UNUSED_PARAMETER") marker: Unit = Unit) : this(storage)
+    internal constructor(
+        storage: PreferencesStorage,
+        @Suppress("UNUSED_PARAMETER") marker: Unit = Unit
+    ) : this(storage = storage, asyncPersist = false)
 
     private val gson = Gson()
     private val lock = Any()
+    private val diskLock = Any()
+    private val writeGeneration = AtomicLong(0L)
+    private val persistExecutor: ExecutorService? = if (asyncPersist) {
+        Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "f2a-prefs-io").apply { isDaemon = true }
+        }
+    } else {
+        null
+    }
 
     private val _preferences = MutableStateFlow(loadInitial())
     override val preferences: StateFlow<VaultPreferences> = _preferences.asStateFlow()
@@ -88,17 +107,43 @@ class VaultPreferencesStore private constructor(
             themeMode = raw.themeMode ?: ThemeMode.SYSTEM,
             autoLockTimeout = raw.autoLockTimeout ?: AutoLockTimeout.SECONDS_30,
             expandedIssuerKeys = safeMap,
-            lastActiveWorkspaceId = (raw.lastActiveWorkspaceId ?: "").ifBlank { "all" }
+            lastActiveWorkspaceId = (raw.lastActiveWorkspaceId ?: "").ifBlank { "all" },
+            privacyMaskEnabled = raw.privacyMaskEnabled,
+            lastBackupAtMillis = raw.lastBackupAtMillis?.takeIf { it > 0L },
+            lastBackupTokenCount = raw.lastBackupTokenCount.coerceAtLeast(0)
         )
     }
 
     private inline fun updatePreferences(transform: (VaultPreferences) -> VaultPreferences) {
+        val jsonToWrite: String
+        val gen: Long
         synchronized(lock) {
-            val updated = normalize(transform(_preferences.value))
+            val current = _preferences.value
+            val updated = normalize(transform(current))
+            if (updated == current) return
             _preferences.value = updated
-            try {
-                storage.writeJson(gson.toJson(updated))
-            } catch (_: Exception) {
+            gen = writeGeneration.incrementAndGet()
+            jsonToWrite = gson.toJson(updated)
+        }
+
+        val executor = persistExecutor
+        if (executor != null) {
+            executor.execute {
+                if (writeGeneration.get() != gen) return@execute
+                synchronized(diskLock) {
+                    if (writeGeneration.get() != gen) return@synchronized
+                    try {
+                        storage.writeJson(jsonToWrite)
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+        } else {
+            synchronized(diskLock) {
+                try {
+                    storage.writeJson(jsonToWrite)
+                } catch (_: Exception) {
+                }
             }
         }
     }
@@ -122,6 +167,21 @@ class VaultPreferencesStore private constructor(
     override fun setLastActiveWorkspaceId(workspaceId: String) {
         val safeId = workspaceId.trim().ifBlank { "all" }
         updatePreferences { it.copy(lastActiveWorkspaceId = safeId) }
+    }
+
+    override fun setPrivacyMaskEnabled(enabled: Boolean) {
+        updatePreferences { it.copy(privacyMaskEnabled = enabled) }
+    }
+
+    override fun recordBackupCompleted(timestampMs: Long, tokenCount: Int) {
+        val safeTs = timestampMs.coerceAtLeast(1L)
+        val safeCount = tokenCount.coerceAtLeast(0)
+        updatePreferences {
+            it.copy(
+                lastBackupAtMillis = safeTs,
+                lastBackupTokenCount = safeCount
+            )
+        }
     }
 
     override fun setGroupExpanded(workspaceId: String, issuerKey: String, expanded: Boolean) {
@@ -158,7 +218,10 @@ class VaultPreferencesStore private constructor(
 
     override fun clearAllPreferences() {
         synchronized(lock) {
+            writeGeneration.incrementAndGet()
             _preferences.value = VaultPreferences()
+        }
+        synchronized(diskLock) {
             try {
                 storage.clear()
             } catch (_: Exception) {

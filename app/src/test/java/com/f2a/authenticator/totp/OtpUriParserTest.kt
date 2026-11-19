@@ -93,4 +93,41 @@ class OtpUriParserTest {
         assertEquals(30, token.period)
         assertEquals(0L, token.counter)
     }
+
+    @Test
+    fun issuerWithColon_preservedInAccountSplit_andBuildOtpAuthUriRoundTrip() {
+        val uri = "otpauth://totp/Cloud%3ACorp:ops%2B1@corp.com?secret=JBSWY3DPEHPK3PXP&issuer=Cloud%3ACorp&algorithm=SHA256&digits=8&period=60"
+        val res = OtpUriParser.parseDetailed(uri)
+        assertTrue(res is OtpUriParser.OtpParseResult.Ok)
+        val token = (res as OtpUriParser.OtpParseResult.Ok).token
+        assertEquals("Cloud:Corp", token.issuer)
+        assertEquals("ops+1@corp.com", token.accountName)
+        assertEquals("SHA256", token.algorithm)
+        assertEquals(8, token.digits)
+        assertEquals(60, token.period)
+
+        val exported = OtpUriParser.buildOtpAuthUri(token)
+        assertTrue(exported != null && exported.startsWith("otpauth://totp/"))
+        val reparsed = OtpUriParser.parseDetailed(exported!!)
+        assertTrue(reparsed is OtpUriParser.OtpParseResult.Ok)
+        val t2 = (reparsed as OtpUriParser.OtpParseResult.Ok).token
+        assertEquals(token.issuer, t2.issuer)
+        assertEquals(token.accountName, t2.accountName)
+        assertEquals(token.secret, t2.secret)
+        assertEquals(token.algorithm, t2.algorithm)
+        assertEquals(token.digits, t2.digits)
+        assertEquals(token.period, t2.period)
+
+        // 损坏凭据严禁生成导出 URI
+        assertNull(OtpUriParser.buildOtpAuthUri(token.copy(secretInvalid = true)))
+    }
+
+    @Test
+    fun multilineOrOversizedInput_rejectedCleanly() {
+        val multiline = "otpauth://totp/GitHub:a@b.com?secret=JBSWY3DPEHPK3PXP&issuer=GitHub\notpauth://totp/Google:c@d.com?secret=JBSWY3DPEHPK3PXP"
+        assertTrue(OtpUriParser.parseDetailed(multiline) is OtpUriParser.OtpParseResult.Error)
+
+        val oversized = "otpauth://totp/Test:u?secret=JBSWY3DPEHPK3PXP&issuer=" + "A".repeat(9000)
+        assertTrue(OtpUriParser.parseDetailed(oversized) is OtpUriParser.OtpParseResult.Error)
+    }
 }

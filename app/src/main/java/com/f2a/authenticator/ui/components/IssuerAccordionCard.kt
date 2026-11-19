@@ -44,10 +44,8 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.f2a.authenticator.data.model.AuthToken
 import com.f2a.authenticator.data.model.Tag
 import com.f2a.authenticator.ui.state.IssuerGroupUi
@@ -63,6 +61,7 @@ fun IssuerAccordionCard(
     group: IssuerGroupUi,
     allTags: List<Tag>,
     clipboardClearSeconds: Int,
+    privacyMasked: Boolean = false,
     nowMsProvider: () -> Long,
     onToggleExpand: () -> Unit,
     onAccountClick: (AuthToken) -> Unit,
@@ -91,18 +90,26 @@ fun IssuerAccordionCard(
         label = "arrow_tween"
     )
 
+    val borderColor = if (expanded) {
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+    } else {
+        semantic.borderSubtle
+    }
+
     Card(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = Space.L, vertical = Space.HS)
             .border(
                 width = 1.dp,
-                color = if (expanded) MaterialTheme.colorScheme.primary.copy(alpha = 0.35f) else semantic.borderSubtle,
+                color = borderColor,
                 shape = RoundedCornerShape(Radius.L)
             ),
         shape = RoundedCornerShape(Radius.L),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        elevation = CardDefaults.cardElevation(
+            defaultElevation = if (semantic.isDark) 0.dp else 0.5.dp
+        )
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Row(
@@ -113,22 +120,21 @@ fun IssuerAccordionCard(
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onToggleExpand()
                     }
-                    .padding(horizontal = Space.L, vertical = Space.M),
+                    .padding(horizontal = Space.L, vertical = Space.ML),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
                     modifier = Modifier
-                        .size(44.dp)
+                        .size(42.dp)
                         .clip(RoundedCornerShape(Radius.M))
-                        .background(brandGradient),
+                        .background(brandGradient)
+                        .border(0.75.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(Radius.M)),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         text = avatarLabel,
-                        fontWeight = FontWeight.Black,
-                        color = Color.White,
-                        fontSize = 17.sp,
-                        letterSpacing = 1.sp
+                        style = Type.AvatarCard,
+                        color = Color.White
                     )
                 }
 
@@ -170,7 +176,7 @@ fun IssuerAccordionCard(
                                 headerEnvColors.forEach { envColor ->
                                     Box(
                                         modifier = Modifier
-                                            .size(7.dp)
+                                            .size(6.dp)
                                             .clip(CircleShape)
                                             .background(envColor)
                                     )
@@ -234,19 +240,19 @@ fun IssuerAccordionCard(
                 enter = expandVertically(
                     animationSpec = tween(Motion.slow, easing = Motion.EaseStandard)
                 ) + fadeIn(
-                    animationSpec = tween(Motion.slow, easing = Motion.EaseStandard)
+                    animationSpec = tween(Motion.base, easing = Motion.EaseStandard)
                 ),
                 exit = shrinkVertically(
                     animationSpec = tween(Motion.slow, easing = Motion.EaseStandard)
                 ) + fadeOut(
-                    animationSpec = tween(Motion.slow, easing = Motion.EaseStandard)
+                    animationSpec = tween(Motion.fast, easing = Motion.EaseStandard)
                 )
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f))
-                        .padding(bottom = Space.HS)
+                        .padding(bottom = Space.XS)
                 ) {
                     HorizontalDivider(color = semantic.borderSubtle)
 
@@ -256,6 +262,7 @@ fun IssuerAccordionCard(
                                 token = token,
                                 allTags = allTags,
                                 clipboardClearSeconds = clipboardClearSeconds,
+                                privacyMasked = privacyMasked,
                                 nowMsProvider = nowMsProvider,
                                 onClick = { onAccountClick(token) },
                                 onTogglePin = { onTogglePin(token.id) },
@@ -267,7 +274,7 @@ fun IssuerAccordionCard(
                         if (index < group.accounts.size - 1) {
                             HorizontalDivider(
                                 modifier = Modifier.padding(horizontal = Space.L),
-                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)
                             )
                         }
                     }

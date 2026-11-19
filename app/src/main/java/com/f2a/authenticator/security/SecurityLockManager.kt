@@ -6,6 +6,8 @@ import com.f2a.authenticator.crypto.KeyStoreManager
 import com.f2a.authenticator.crypto.SecretCipher
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.security.MessageDigest
@@ -17,28 +19,35 @@ import javax.crypto.spec.PBEKeySpec
 sealed class PinConfigResult {
     object Ok : PinConfigResult()
     object InvalidFormat : PinConfigResult()       // 非 6 位纯数字
-    object WeakPin : PinConfigResult()             // 全同数字或连续顺逆序
+    object WeakPin : PinConfigResult()             // 弱密码（全同/连续/重复模式）
     object SameAsCounterpart : PinConfigResult()   // 胁迫码与主密码相同
     data class AuthFailed(val verifyResult: SecurityLockManager.VerifyResult) : PinConfigResult()
 }
 
 /**
- * 终极安全自毁防线管理器（V2 重构）：
- * 1. 独立主安全密码与胁迫密码（PBKDF2WithHmacSHA256 100K 迭代，Dispatchers.Default 异步执行，擦除 PBEKeySpec）
- * 2. 基于 Clock.elapsedRealtimeMs() 单调时钟防篡改冷却，且支持设备重启后延续剩余冷却时长
- * 3. 主密码修改、胁迫码设置与清除（强制 6 位数字、拦截弱 PIN、严禁主密与胁迫码同密）
- * 4. 缺失 PIN 降级异常检测与非阻塞自毁（不再在库层擅自 exitProcess(0)）
+ * 终极安全自毁防线管理器（V3 安全加固）：
+ * 1. 全鉴权与写配置路径加 Mutex 互斥锁，并在 IO 线程同步 `.commit()` 防强杀重置计数；
+ * 2. 独立主安全密码与胁迫密码（新哈希升级至 PBKDF2WithHmacSHA256 210K 带 `v2:` 前缀，完全兼容旧 100K 哈希）；
+ * 3. 基于 Clock.elapsedRealtimeMs() 单调时钟防篡改冷却，支持设备重启后延续剩余冷却时长；
+ * 4. 支持 `onBeforeDestructListener` 在毁 Key 删盘前阻断内存回写，以及 `onBiometricVerified()` 归零失败计数；
+ * 5. 补齐常见弱 PIN 模式检测（AAABBB / AABBCC / ABABAB / ABCABC 等）。
  */
 class SecurityLockManager(
     private val context: Context,
     private val clock: Clock = SystemClockImpl,
     private val cipher: SecretCipher = KeyStoreManager,
-    private val cryptoDispatcher: CoroutineDispatcher = Dispatchers.Default
+    private val cryptoDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) {
 
     private val appContext: Context = context.applicationContext ?: context
     private val prefs: SharedPreferences
         get() = appContext.getSharedPreferences(PREF_SECURITY, Context.MODE_PRIVATE)
+
+    private val authMutex = Mutex()
+
+    @Volatile
+    private var onBeforeDestructListener: (() -> Unit)? = null
 
     companion object {
         private const val PREF_SECURITY = "security_vault_guard"
@@ -61,8 +70,22 @@ class SecurityLockManager(
         const val MIN_MAX_ATTEMPTS = 3
         const val MAX_MAX_ATTEMPTS = 10
         private const val PIN_LENGTH = 6
-        private const val ITERATIONS = 100_000
+        private const val LEGACY_ITERATIONS = 100_000
+        private const val ITERATIONS_V2 = 210_000
+        private const val MIN_SUPPORTED_ITERATIONS = 10_000
+        private const val MAX_SUPPORTED_ITERATIONS = 1_000_000
+        private const val HASH_PREFIX_V2 = "v2:"
         private const val KEY_LENGTH = 256
+
+        private val TRIVIAL_WEAK_PINS = setOf(
+            "000001", "100000", "012345", "543210", "123450",
+            "135790", "024680", "258000", "520520", "131420",
+            "666888", "888666", "114514"
+        )
+    }
+
+    fun setOnBeforeDestructListener(listener: (() -> Unit)?) {
+        onBeforeDestructListener = listener
     }
 
     fun isPinConfigured(): Boolean {
@@ -90,7 +113,7 @@ class SecurityLockManager(
     }
 
     fun setMaxAttempts(maxAttempts: Int) {
-        prefs.edit().putInt(KEY_MAX_ATTEMPTS, maxAttempts.coerceIn(MIN_MAX_ATTEMPTS, MAX_MAX_ATTEMPTS)).apply()
+        prefs.edit().putInt(KEY_MAX_ATTEMPTS, maxAttempts.coerceIn(MIN_MAX_ATTEMPTS, MAX_MAX_ATTEMPTS)).commit()
     }
 
     fun isFlagSecureEnabled(): Boolean {
@@ -98,7 +121,7 @@ class SecurityLockManager(
     }
 
     fun setFlagSecureEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_FLAG_SECURE_ENABLED, enabled).apply()
+        prefs.edit().putBoolean(KEY_FLAG_SECURE_ENABLED, enabled).commit()
     }
 
     fun getClipboardClearSeconds(): Int {
@@ -106,7 +129,7 @@ class SecurityLockManager(
     }
 
     fun setClipboardClearSeconds(seconds: Int) {
-        prefs.edit().putInt(KEY_CLIPBOARD_CLEAR_SECONDS, seconds.coerceAtLeast(0)).apply()
+        prefs.edit().putInt(KEY_CLIPBOARD_CLEAR_SECONDS, seconds.coerceAtLeast(0)).commit()
     }
 
     fun isBiometricEnabled(): Boolean {
@@ -114,7 +137,7 @@ class SecurityLockManager(
     }
 
     fun setBiometricEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_BIOMETRIC_ENABLED, enabled).apply()
+        prefs.edit().putBoolean(KEY_BIOMETRIC_ENABLED, enabled).commit()
     }
 
     fun getRemainingAttempts(): Int {
@@ -145,49 +168,87 @@ class SecurityLockManager(
             prefs.edit()
                 .putLong(KEY_LOCKOUT_LAST_ELAPSED, nowElapsed)
                 .putLong(KEY_LOCKOUT_UNTIL_ELAPSED, newUntil)
-                .apply()
+                .commit()
             remainingStored
         } else {
             val diff = untilElapsed - nowElapsed
             if (diff <= 0L) {
-                clearLockoutState()
+                clearLockoutStateLocked()
                 0L
             } else {
                 prefs.edit()
                     .putLong(KEY_LOCKOUT_LAST_ELAPSED, nowElapsed)
                     .putLong(KEY_LOCKOUT_REMAINING_MS, diff)
-                    .apply()
+                    .commit()
                 diff
             }
         }
     }
 
-    private fun saveLockoutState(delayMs: Long) {
+    private fun saveLockoutStateLocked(delayMs: Long) {
         val nowElapsed = clock.elapsedRealtimeMs()
         prefs.edit()
             .putLong(KEY_LOCKOUT_UNTIL_ELAPSED, nowElapsed + delayMs)
             .putLong(KEY_LOCKOUT_LAST_ELAPSED, nowElapsed)
             .putLong(KEY_LOCKOUT_REMAINING_MS, delayMs)
-            .apply()
+            .commit()
     }
 
-    private fun clearLockoutState() {
+    private fun clearLockoutStateLocked() {
         prefs.edit()
             .putLong(KEY_LOCKOUT_UNTIL_ELAPSED, 0L)
             .putLong(KEY_LOCKOUT_LAST_ELAPSED, 0L)
             .putLong(KEY_LOCKOUT_REMAINING_MS, 0L)
-            .apply()
+            .commit()
+    }
+
+    private fun resetAttemptsAndLockoutLocked() {
+        prefs.edit()
+            .putInt(KEY_FAILED_ATTEMPTS, 0)
+            .putLong(KEY_LOCKOUT_UNTIL_ELAPSED, 0L)
+            .putLong(KEY_LOCKOUT_LAST_ELAPSED, 0L)
+            .putLong(KEY_LOCKOUT_REMAINING_MS, 0L)
+            .commit()
     }
 
     private fun validatePinFormatAndStrength(pin: String): PinConfigResult? {
         if (pin.length != PIN_LENGTH || !pin.all { it in '0'..'9' }) {
             return PinConfigResult.InvalidFormat
         }
+        // 1. 全同数字 (如 111111)
         if (pin.all { it == pin[0] }) {
             return PinConfigResult.WeakPin
         }
+        // 2. 连续顺逆序 (如 123456, 654321)
         val diffs = (0 until pin.length - 1).map { pin[it + 1] - pin[it] }
         if (diffs.all { it == 1 } || diffs.all { it == -1 }) {
+            return PinConfigResult.WeakPin
+        }
+        // 3. AAABBB (如 111222)
+        if (pin[0] == pin[1] && pin[1] == pin[2] && pin[3] == pin[4] && pin[4] == pin[5]) {
+            return PinConfigResult.WeakPin
+        }
+        // 4. AABBCC (如 112233)
+        if (pin[0] == pin[1] && pin[2] == pin[3] && pin[4] == pin[5]) {
+            return PinConfigResult.WeakPin
+        }
+        // 5. ABABAB (如 121212)
+        if (pin[0] == pin[2] && pin[2] == pin[4] && pin[1] == pin[3] && pin[3] == pin[5]) {
+            return PinConfigResult.WeakPin
+        }
+        // 6. ABCABC (如 123123)
+        if (pin.substring(0, 3) == pin.substring(3, 6)) {
+            return PinConfigResult.WeakPin
+        }
+        // 7. 镜像顺序列 ABCCBA (如 123321, 654456)
+        if (pin.substring(0, 3) == pin.substring(3, 6).reversed() &&
+            kotlin.math.abs(pin[1] - pin[0]) == 1 &&
+            pin[2] - pin[1] == pin[1] - pin[0]
+        ) {
+            return PinConfigResult.WeakPin
+        }
+        // 8. 常见极弱数字组合
+        if (pin in TRIVIAL_WEAK_PINS) {
             return PinConfigResult.WeakPin
         }
         return null
@@ -200,121 +261,158 @@ class SecurityLockManager(
             if (duressPin == masterPin) return PinConfigResult.SameAsCounterpart
         }
 
-        val (masterSalt, masterHash, duressPair) = withContext(cryptoDispatcher) {
-            val mSalt = generateSalt()
-            val mHash = hashPin(masterPin, mSalt)
-            val dPair = if (duressPin != null) {
-                val dSalt = generateSalt()
-                val dHash = hashPin(duressPin, dSalt)
-                dSalt to dHash
-            } else {
-                null
+        return authMutex.withLock {
+            val (masterSalt, masterHash, duressPair) = withContext(cryptoDispatcher) {
+                val mSalt = generateSalt()
+                val mHash = hashPinV2(masterPin, mSalt)
+                val dPair = if (duressPin != null) {
+                    val dSalt = generateSalt()
+                    val dHash = hashPinV2(duressPin, dSalt)
+                    dSalt to dHash
+                } else {
+                    null
+                }
+                Triple(mSalt, mHash, dPair)
             }
-            Triple(mSalt, mHash, dPair)
+
+            withContext(ioDispatcher) {
+                val editor = prefs.edit()
+                    .putString(KEY_PIN_HASH, masterHash)
+                    .putString(KEY_PIN_SALT, Base64.getEncoder().encodeToString(masterSalt))
+                    .putBoolean(KEY_PIN_CONFIGURED_FLAG, true)
+                    .putInt(KEY_FAILED_ATTEMPTS, 0)
+                    .putLong(KEY_LOCKOUT_UNTIL_ELAPSED, 0L)
+                    .putLong(KEY_LOCKOUT_LAST_ELAPSED, 0L)
+                    .putLong(KEY_LOCKOUT_REMAINING_MS, 0L)
+
+                if (duressPair != null) {
+                    editor
+                        .putString(KEY_DURESS_PIN_SALT, Base64.getEncoder().encodeToString(duressPair.first))
+                        .putString(KEY_DURESS_PIN_HASH, duressPair.second)
+                } else {
+                    editor
+                        .remove(KEY_DURESS_PIN_HASH)
+                        .remove(KEY_DURESS_PIN_SALT)
+                }
+                editor.commit()
+            }
+            PinConfigResult.Ok
         }
-
-        val editor = prefs.edit()
-            .putString(KEY_PIN_HASH, masterHash)
-            .putString(KEY_PIN_SALT, Base64.getEncoder().encodeToString(masterSalt))
-            .putBoolean(KEY_PIN_CONFIGURED_FLAG, true)
-            .putInt(KEY_FAILED_ATTEMPTS, 0)
-            .putLong(KEY_LOCKOUT_UNTIL_ELAPSED, 0L)
-            .putLong(KEY_LOCKOUT_LAST_ELAPSED, 0L)
-            .putLong(KEY_LOCKOUT_REMAINING_MS, 0L)
-
-        if (duressPair != null) {
-            editor
-                .putString(KEY_DURESS_PIN_SALT, Base64.getEncoder().encodeToString(duressPair.first))
-                .putString(KEY_DURESS_PIN_HASH, duressPair.second)
-        } else {
-            editor
-                .remove(KEY_DURESS_PIN_HASH)
-                .remove(KEY_DURESS_PIN_SALT)
-        }
-
-        editor.apply()
-        return PinConfigResult.Ok
     }
 
     suspend fun changeMasterPin(currentPin: String, newPin: String): PinConfigResult {
         validatePinFormatAndStrength(newPin)?.let { return it }
 
-        val authResult = verifyPin(currentPin)
-        if (authResult != VerifyResult.Success) {
-            return PinConfigResult.AuthFailed(authResult)
-        }
-
-        val duressHash = prefs.getString(KEY_DURESS_PIN_HASH, null)
-        val duressSaltStr = prefs.getString(KEY_DURESS_PIN_SALT, null)
-        if (!duressHash.isNullOrEmpty() && !duressSaltStr.isNullOrEmpty()) {
-            val matchesDuress = withContext(cryptoDispatcher) {
-                val duressSalt = decodeBase64OrNull(duressSaltStr) ?: return@withContext false
-                constEq(hashPin(newPin, duressSalt), duressHash)
+        return authMutex.withLock {
+            val authResult = verifyPinLocked(currentPin)
+            if (authResult != VerifyResult.Success) {
+                return@withLock PinConfigResult.AuthFailed(authResult)
             }
-            if (matchesDuress) {
-                return PinConfigResult.SameAsCounterpart
+
+            val duressHash = prefs.getString(KEY_DURESS_PIN_HASH, null)
+            val duressSaltStr = prefs.getString(KEY_DURESS_PIN_SALT, null)
+            if (!duressHash.isNullOrEmpty() && !duressSaltStr.isNullOrEmpty()) {
+                val matchesDuress = withContext(cryptoDispatcher) {
+                    val duressSalt = decodeBase64OrNull(duressSaltStr) ?: return@withContext false
+                    verifyHash(newPin, duressSalt, duressHash)
+                }
+                if (matchesDuress) {
+                    return@withLock PinConfigResult.SameAsCounterpart
+                }
             }
+
+            val (newSalt, newHash) = withContext(cryptoDispatcher) {
+                val salt = generateSalt()
+                salt to hashPinV2(newPin, salt)
+            }
+
+            withContext(ioDispatcher) {
+                prefs.edit()
+                    .putString(KEY_PIN_HASH, newHash)
+                    .putString(KEY_PIN_SALT, Base64.getEncoder().encodeToString(newSalt))
+                    .putBoolean(KEY_PIN_CONFIGURED_FLAG, true)
+                    .putInt(KEY_FAILED_ATTEMPTS, 0)
+                    .putLong(KEY_LOCKOUT_UNTIL_ELAPSED, 0L)
+                    .putLong(KEY_LOCKOUT_LAST_ELAPSED, 0L)
+                    .putLong(KEY_LOCKOUT_REMAINING_MS, 0L)
+                    .commit()
+            }
+            PinConfigResult.Ok
         }
-
-        val (newSalt, newHash) = withContext(cryptoDispatcher) {
-            val salt = generateSalt()
-            salt to hashPin(newPin, salt)
-        }
-
-        prefs.edit()
-            .putString(KEY_PIN_HASH, newHash)
-            .putString(KEY_PIN_SALT, Base64.getEncoder().encodeToString(newSalt))
-            .putBoolean(KEY_PIN_CONFIGURED_FLAG, true)
-            .putInt(KEY_FAILED_ATTEMPTS, 0)
-            .putLong(KEY_LOCKOUT_UNTIL_ELAPSED, 0L)
-            .putLong(KEY_LOCKOUT_LAST_ELAPSED, 0L)
-            .putLong(KEY_LOCKOUT_REMAINING_MS, 0L)
-            .apply()
-
-        return PinConfigResult.Ok
     }
 
     suspend fun setDuressPin(currentMasterPin: String, duressPin: String): PinConfigResult {
         validatePinFormatAndStrength(duressPin)?.let { return it }
 
-        val authResult = verifyPin(currentMasterPin)
-        if (authResult != VerifyResult.Success) {
-            return PinConfigResult.AuthFailed(authResult)
+        return authMutex.withLock {
+            val authResult = verifyPinLocked(currentMasterPin)
+            if (authResult != VerifyResult.Success) {
+                return@withLock PinConfigResult.AuthFailed(authResult)
+            }
+
+            if (duressPin == currentMasterPin) {
+                return@withLock PinConfigResult.SameAsCounterpart
+            }
+
+            val (duressSalt, duressHash) = withContext(cryptoDispatcher) {
+                val salt = generateSalt()
+                salt to hashPinV2(duressPin, salt)
+            }
+
+            withContext(ioDispatcher) {
+                prefs.edit()
+                    .putString(KEY_DURESS_PIN_HASH, duressHash)
+                    .putString(KEY_DURESS_PIN_SALT, Base64.getEncoder().encodeToString(duressSalt))
+                    .commit()
+            }
+            PinConfigResult.Ok
         }
-
-        if (duressPin == currentMasterPin) {
-            return PinConfigResult.SameAsCounterpart
-        }
-
-        val (duressSalt, duressHash) = withContext(cryptoDispatcher) {
-            val salt = generateSalt()
-            salt to hashPin(duressPin, salt)
-        }
-
-        prefs.edit()
-            .putString(KEY_DURESS_PIN_HASH, duressHash)
-            .putString(KEY_DURESS_PIN_SALT, Base64.getEncoder().encodeToString(duressSalt))
-            .apply()
-
-        return PinConfigResult.Ok
     }
 
     suspend fun clearDuressPin(currentMasterPin: String): PinConfigResult {
-        val authResult = verifyPin(currentMasterPin)
-        if (authResult != VerifyResult.Success) {
-            return PinConfigResult.AuthFailed(authResult)
+        return authMutex.withLock {
+            val authResult = verifyPinLocked(currentMasterPin)
+            if (authResult != VerifyResult.Success) {
+                return@withLock PinConfigResult.AuthFailed(authResult)
+            }
+
+            withContext(ioDispatcher) {
+                prefs.edit()
+                    .remove(KEY_DURESS_PIN_HASH)
+                    .remove(KEY_DURESS_PIN_SALT)
+                    .commit()
+            }
+            PinConfigResult.Ok
         }
+    }
 
-        prefs.edit()
-            .remove(KEY_DURESS_PIN_HASH)
-            .remove(KEY_DURESS_PIN_SALT)
-            .apply()
-
-        return PinConfigResult.Ok
+    /**
+     * 生物识别通过后的状态对齐：冷却期内或未开启生物识别/未设 PIN 返回 false；
+     * 否则在互斥锁下同步清零失败次数与冷却记录，防止后续单次 PIN 误输直接触发自毁。
+     */
+    suspend fun onBiometricVerified(): Boolean {
+        return authMutex.withLock {
+            if (!isPinConfigured() || !isBiometricEnabled()) {
+                return@withLock false
+            }
+            if (getLockoutRemainingSeconds() > 0L) {
+                return@withLock false
+            }
+            withContext(ioDispatcher) {
+                resetAttemptsAndLockoutLocked()
+            }
+            true
+        }
     }
 
     suspend fun verifyPin(inputPin: String): VerifyResult {
-        val lockoutSec = getLockoutRemainingSeconds()
+        return authMutex.withLock {
+            verifyPinLocked(inputPin)
+        }
+    }
+
+    private suspend fun verifyPinLocked(inputPin: String): VerifyResult {
+        val lockoutSec = withContext(ioDispatcher) { getLockoutRemainingSeconds() }
         if (lockoutSec > 0L) {
             return VerifyResult.LockedOut(lockoutSec)
         }
@@ -325,10 +423,10 @@ class SecurityLockManager(
         if (!duressHash.isNullOrEmpty() && !duressSaltStr.isNullOrEmpty()) {
             val matchedDuress = withContext(cryptoDispatcher) {
                 val salt = decodeBase64OrNull(duressSaltStr) ?: return@withContext false
-                constEq(hashPin(inputPin, salt), duressHash)
+                verifyHash(inputPin, salt, duressHash)
             }
             if (matchedDuress) {
-                executePermanentSelfDestruct(silent = true)
+                executePermanentSelfDestructLocked(silent = true)
                 return VerifyResult.DuressTriggered
             }
         }
@@ -342,31 +440,32 @@ class SecurityLockManager(
 
         val matchedMaster = withContext(cryptoDispatcher) {
             val salt = decodeBase64OrNull(saltStr) ?: return@withContext false
-            constEq(hashPin(inputPin, salt), savedHash)
+            verifyHash(inputPin, salt, savedHash)
         }
 
         if (matchedMaster) {
-            prefs.edit()
-                .putInt(KEY_FAILED_ATTEMPTS, 0)
-                .putLong(KEY_LOCKOUT_UNTIL_ELAPSED, 0L)
-                .putLong(KEY_LOCKOUT_LAST_ELAPSED, 0L)
-                .putLong(KEY_LOCKOUT_REMAINING_MS, 0L)
-                .apply()
+            withContext(ioDispatcher) {
+                resetAttemptsAndLockoutLocked()
+            }
             return VerifyResult.Success
         }
 
         val max = getMaxAttempts()
         val failed = prefs.getInt(KEY_FAILED_ATTEMPTS, 0) + 1
-        prefs.edit().putInt(KEY_FAILED_ATTEMPTS, failed).apply()
+        withContext(ioDispatcher) {
+            prefs.edit().putInt(KEY_FAILED_ATTEMPTS, failed).commit()
+        }
 
         if (failed >= max) {
-            executePermanentSelfDestruct(silent = false)
+            executePermanentSelfDestructLocked(silent = false)
             return VerifyResult.SelfDestructed
         }
 
         if (failed >= 3) {
             val delaySeconds = 30L * (failed - 2)
-            saveLockoutState(delaySeconds * 1000L)
+            withContext(ioDispatcher) {
+                saveLockoutStateLocked(delaySeconds * 1000L)
+            }
             return VerifyResult.LockedOut(delaySeconds)
         }
 
@@ -375,32 +474,43 @@ class SecurityLockManager(
 
     /**
      * 销毁硬件密钥与本地数据目录。
-     * 不再在底层库擅自调用 exitProcess(0)；非静默主动引爆由上层 Activity.finishAndRemoveTask() 配合完成。
+     * 先触发 onBeforeDestructListener 同步阻断内存库/偏好/剪贴板，再执行删 Key 与删盘。
      */
-    suspend fun executePermanentSelfDestruct(@Suppress("UNUSED_PARAMETER") silent: Boolean = false) {
+    suspend fun executePermanentSelfDestruct(silent: Boolean = false) {
+        authMutex.withLock {
+            executePermanentSelfDestructLocked(silent)
+        }
+    }
+
+    private suspend fun executePermanentSelfDestructLocked(@Suppress("UNUSED_PARAMETER") silent: Boolean) {
+        try {
+            onBeforeDestructListener?.invoke()
+        } catch (_: Exception) {
+        }
+
         try {
             cipher.destroyMasterKey()
         } catch (_: Exception) {
         }
 
-        try {
-            val deleted = appContext.deleteSharedPreferences(PREF_SECURITY)
-            if (!deleted) {
-                prefs.edit().clear().commit()
-            }
-        } catch (_: Exception) {
+        withContext(ioDispatcher) {
             try {
-                prefs.edit().clear().commit()
+                val deleted = appContext.deleteSharedPreferences(PREF_SECURITY)
+                if (!deleted) {
+                    prefs.edit().clear().commit()
+                }
+            } catch (_: Exception) {
+                try {
+                    prefs.edit().clear().commit()
+                } catch (_: Exception) {
+                }
+            }
+            try {
+                appContext.deleteSharedPreferences("my_2fa_secure_store")
+                appContext.deleteSharedPreferences("my_2fa_vault_prefs")
             } catch (_: Exception) {
             }
-        }
-        try {
-            appContext.deleteSharedPreferences("my_2fa_secure_store")
-            appContext.deleteSharedPreferences("my_2fa_vault_prefs")
-        } catch (_: Exception) {
-        }
 
-        withContext(Dispatchers.IO) {
             try {
                 val dataDirPath = appContext.applicationInfo?.dataDir
                 if (!dataDirPath.isNullOrBlank()) {
@@ -427,9 +537,29 @@ class SecurityLockManager(
         return salt
     }
 
-    private fun hashPin(pin: String, salt: ByteArray): String {
+    private fun hashPinV2(pin: String, salt: ByteArray): String {
+        val encoded = hashPinRaw(pin, salt, ITERATIONS_V2)
+        return "$HASH_PREFIX_V2$ITERATIONS_V2:$encoded"
+    }
+
+    private fun verifyHash(pin: String, salt: ByteArray, storedHash: String): Boolean {
+        return if (storedHash.startsWith(HASH_PREFIX_V2)) {
+            val rest = storedHash.removePrefix(HASH_PREFIX_V2)
+            val colonIdx = rest.indexOf(':')
+            if (colonIdx <= 0) return false
+            val iter = rest.substring(0, colonIdx).toIntOrNull() ?: return false
+            if (iter !in MIN_SUPPORTED_ITERATIONS..MAX_SUPPORTED_ITERATIONS) return false
+            val expectedB64 = rest.substring(colonIdx + 1)
+            if (expectedB64.isEmpty()) return false
+            constEq(hashPinRaw(pin, salt, iter), expectedB64)
+        } else {
+            constEq(hashPinRaw(pin, salt, LEGACY_ITERATIONS), storedHash)
+        }
+    }
+
+    private fun hashPinRaw(pin: String, salt: ByteArray, iterations: Int): String {
         val chars = pin.toCharArray()
-        val spec = PBEKeySpec(chars, salt, ITERATIONS, KEY_LENGTH)
+        val spec = PBEKeySpec(chars, salt, iterations, KEY_LENGTH)
         var hash: ByteArray? = null
         return try {
             val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")

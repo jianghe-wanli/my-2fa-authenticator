@@ -6,7 +6,10 @@ import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
 import android.util.Base64
 import java.nio.charset.StandardCharsets
+import java.security.InvalidKeyException
 import java.security.KeyStore
+import java.security.KeyStoreException
+import java.security.ProviderException
 import java.security.UnrecoverableKeyException
 import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
@@ -79,9 +82,17 @@ object KeyStoreManager : SecretCipher {
                 try {
                     keyGenerator.init(buildKeyGenSpec(useStrongBox = true))
                     keyGenerator.generateKey()
-                } catch (_: StrongBoxUnavailableException) {
-                    keyGenerator.init(buildKeyGenSpec(useStrongBox = false))
-                    keyGenerator.generateKey()
+                } catch (e: Exception) {
+                    // 部分 OEM 设备 StrongBox HAL 异常可能抛出 ProviderException 或 KeyStoreException，统一降级至 TEE
+                    if (e is StrongBoxUnavailableException ||
+                        e is ProviderException ||
+                        e is KeyStoreException
+                    ) {
+                        keyGenerator.init(buildKeyGenSpec(useStrongBox = false))
+                        keyGenerator.generateKey()
+                    } else {
+                        throw e
+                    }
                 }
             } else {
                 keyGenerator.init(buildKeyGenSpec(useStrongBox = false))
@@ -105,6 +116,12 @@ object KeyStoreManager : SecretCipher {
         getSecretKeyLocked()
     }
 
+    private fun invalidateCachedKey() {
+        synchronized(lock) {
+            cachedSecretKey = null
+        }
+    }
+
     /**
      * 【终极销毁】：在互斥锁内永久删除硬件主密钥，并置 destroyed 禁止后续重建。
      */
@@ -126,16 +143,18 @@ object KeyStoreManager : SecretCipher {
 
     /**
      * 加密明文，输出格式：Base64(IV + CipherText + Tag)。
-     * 捕获 KeyStore / 状态异常并封装为 EncryptResult.Failed，绝不裸抛崩溃。
+     * 捕获 KeyStore / 状态异常并封装为 EncryptResult.Failed，绝不裸抛崩溃；结束后擦除临时明文字节数组。
      */
     override fun encrypt(plainText: String): SecretCipher.EncryptResult {
         if (plainText.isEmpty()) return SecretCipher.EncryptResult.Ok("")
+        var plainBytes: ByteArray? = null
         return try {
             val key = getSecretKey()
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(Cipher.ENCRYPT_MODE, key)
             val iv = cipher.iv
-            val encryptedBytes = cipher.doFinal(plainText.toByteArray(StandardCharsets.UTF_8))
+            plainBytes = plainText.toByteArray(StandardCharsets.UTF_8)
+            val encryptedBytes = cipher.doFinal(plainBytes)
 
             val combined = ByteArray(iv.size + encryptedBytes.size)
             System.arraycopy(iv, 0, combined, 0, iv.size)
@@ -143,11 +162,20 @@ object KeyStoreManager : SecretCipher {
 
             SecretCipher.EncryptResult.Ok(Base64.encodeToString(combined, Base64.NO_WRAP))
         } catch (e: UnrecoverableKeyException) {
+            invalidateCachedKey()
             SecretCipher.EncryptResult.Failed(e.message ?: "key unrecoverable")
+        } catch (e: InvalidKeyException) {
+            invalidateCachedKey()
+            SecretCipher.EncryptResult.Failed(e.message ?: "key invalid")
+        } catch (e: KeyStoreException) {
+            invalidateCachedKey()
+            SecretCipher.EncryptResult.Failed(e.message ?: "keystore error")
         } catch (e: IllegalStateException) {
             SecretCipher.EncryptResult.Failed(e.message ?: "keystore destroyed")
         } catch (e: Exception) {
             SecretCipher.EncryptResult.Failed(e.message ?: e.javaClass.simpleName)
+        } finally {
+            plainBytes?.fill(0)
         }
     }
 
@@ -157,10 +185,11 @@ object KeyStoreManager : SecretCipher {
     }
 
     /**
-     * 解密 Base64 字符串，最小长度校验为 IV(12) + GCM_TAG(16) = 28 字节。
+     * 解密 Base64 字符串，最小长度校验为 IV(12) + GCM_TAG(16) = 28 字节；结束后擦除临时明文字节数组。
      */
     override fun decrypt(cipherTextBase64: String): SecretCipher.DecryptResult {
         if (cipherTextBase64.isEmpty()) return SecretCipher.DecryptResult.Empty
+        var decryptedBytes: ByteArray? = null
         return try {
             val combined = Base64.decode(cipherTextBase64, Base64.NO_WRAP)
             if (combined.size < IV_LENGTH + GCM_TAG_BYTES) {
@@ -176,16 +205,25 @@ object KeyStoreManager : SecretCipher {
             val spec = GCMParameterSpec(GCM_TAG_LENGTH, iv)
             cipher.init(Cipher.DECRYPT_MODE, getSecretKey(), spec)
 
-            val decryptedBytes = cipher.doFinal(cipherText)
+            decryptedBytes = cipher.doFinal(cipherText)
             SecretCipher.DecryptResult.Ok(String(decryptedBytes, StandardCharsets.UTF_8))
-        } catch (e: AEADBadTagException) {
+        } catch (_: AEADBadTagException) {
             SecretCipher.DecryptResult.Corrupt("bad GCM tag")
         } catch (e: UnrecoverableKeyException) {
+            invalidateCachedKey()
             SecretCipher.DecryptResult.KeyInvalid(e.message ?: "key unrecoverable")
+        } catch (e: InvalidKeyException) {
+            invalidateCachedKey()
+            SecretCipher.DecryptResult.KeyInvalid(e.message ?: "key invalid")
+        } catch (e: KeyStoreException) {
+            invalidateCachedKey()
+            SecretCipher.DecryptResult.KeyInvalid(e.message ?: "keystore error")
         } catch (e: IllegalStateException) {
             SecretCipher.DecryptResult.KeyInvalid(e.message ?: "keystore destroyed")
         } catch (e: Exception) {
             SecretCipher.DecryptResult.Corrupt(e.javaClass.simpleName)
+        } finally {
+            decryptedBytes?.fill(0)
         }
     }
 }

@@ -67,6 +67,8 @@ class VaultPreferencesStoreTest {
         store.setThemeMode(ThemeMode.LIGHT)
         store.setAutoLockTimeout(AutoLockTimeout.SECONDS_300)
         store.setLastActiveWorkspaceId("workspace_devops")
+        store.setPrivacyMaskEnabled(true)
+        store.recordBackupCompleted(1_700_000_000_000L, 12)
 
         val reloaded = VaultPreferencesStore(storage).preferences.value
         assertEquals(CollapsePolicy.REMEMBER_LAST, reloaded.collapsePolicy)
@@ -74,9 +76,14 @@ class VaultPreferencesStoreTest {
         assertEquals(ThemeMode.LIGHT, reloaded.themeMode)
         assertEquals(AutoLockTimeout.SECONDS_300, reloaded.autoLockTimeout)
         assertEquals("workspace_devops", reloaded.lastActiveWorkspaceId)
+        assertEquals(true, reloaded.privacyMaskEnabled)
+        assertEquals(1_700_000_000_000L, reloaded.lastBackupAtMillis)
+        assertEquals(12, reloaded.lastBackupTokenCount)
 
         store.clearAllPreferences()
         assertEquals(CollapsePolicy.COLLAPSE_ALL, store.preferences.value.collapsePolicy)
+        assertEquals(false, store.preferences.value.privacyMaskEnabled)
+        assertEquals(null, store.preferences.value.lastBackupAtMillis)
         assertEquals(null, storage.json)
     }
 

@@ -1,5 +1,12 @@
 package com.f2a.authenticator.ui.screens.scan
 
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -17,15 +24,18 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -34,6 +44,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.min
+import com.f2a.authenticator.ui.theme.CobaltPrimaryDark
 import com.f2a.authenticator.ui.theme.IconSize
 import com.f2a.authenticator.ui.theme.LocalSemanticColors
 import com.f2a.authenticator.ui.theme.Radius
@@ -44,7 +55,17 @@ import com.f2a.authenticator.ui.theme.Type
 @Composable
 fun ScanOverlayLayer(modifier: Modifier = Modifier) {
     val scrimColor = LocalSemanticColors.current.scrim
-    val bracketColor = MaterialTheme.colorScheme.primary
+    val bracketColor = CobaltPrimaryDark
+    val transition = rememberInfiniteTransition(label = "scan_line")
+    val lineProgress by transition.animateFloat(
+        initialValue = 0.08f,
+        targetValue = 0.92f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 2200, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "scan_line_y"
+    )
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
         val windowSize = min(264.dp, min(maxWidth, maxHeight) * 0.72f)
@@ -85,12 +106,17 @@ fun ScanOverlayLayer(modifier: Modifier = Modifier) {
                 .size(windowSize)
                 .drawWithContent {
                     drawContent()
-                    val stroke = 2.dp.toPx()
+                    val stroke = 2.5.dp.toPx()
                     val arm = (windowSize * 0.11f).toPx().coerceAtMost(28.dp.toPx())
                     val r = Radius.XS.toPx()
                     val w = size.width
                     val h = size.height
                     val style = Stroke(width = stroke, cap = StrokeCap.Round)
+
+                    drawRect(
+                        color = Color.White.copy(alpha = 0.12f),
+                        style = Stroke(width = 1.dp.toPx())
+                    )
 
                     fun bracket(cx: Float, cy: Float, dx: Float, dy: Float) {
                         val path = Path().apply {
@@ -106,7 +132,25 @@ fun ScanOverlayLayer(modifier: Modifier = Modifier) {
                     bracket(0f, h, 1f, -1f)
                     bracket(w, h, -1f, -1f)
                 }
-        )
+        ) {
+            // 克制单线精密扫描指示
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val y = size.height * lineProgress
+                val inset = 12.dp.toPx()
+                drawLine(
+                    brush = Brush.horizontalGradient(
+                        listOf(
+                            Color.Transparent,
+                            bracketColor.copy(alpha = 0.65f),
+                            Color.Transparent
+                        )
+                    ),
+                    start = Offset(inset, y),
+                    end = Offset(size.width - inset, y),
+                    strokeWidth = 1.5.dp.toPx()
+                )
+            }
+        }
     }
 }
 
@@ -161,7 +205,7 @@ fun CameraPermissionGuide(
         ) {
             Text(
                 text = if (permanentlyDenied) "去系统设置开启" else "授权相机",
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.SemiBold
             )
         }
         Spacer(modifier = Modifier.height(Space.M))
@@ -175,7 +219,7 @@ fun CameraPermissionGuide(
         ) {
             Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(IconSize.S))
             Spacer(modifier = Modifier.width(Space.S))
-            Text("从相册选择二维码", fontWeight = FontWeight.Bold)
+            Text("从相册选择二维码", fontWeight = FontWeight.SemiBold)
         }
         Spacer(modifier = Modifier.height(Space.M))
         OutlinedButton(
@@ -186,7 +230,7 @@ fun CameraPermissionGuide(
                 .heightIn(min = Touch.MinTarget),
             colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
         ) {
-            Text("手动输入代码", fontWeight = FontWeight.Bold)
+            Text("手动输入代码", fontWeight = FontWeight.SemiBold)
         }
     }
 }

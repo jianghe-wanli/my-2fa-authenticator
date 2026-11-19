@@ -1,5 +1,6 @@
 package com.f2a.authenticator.ui.screens.settings
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -7,13 +8,17 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DeleteForever
@@ -51,6 +56,8 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.SecureFlagPolicy
 import com.f2a.authenticator.data.model.Tag
 import com.f2a.authenticator.data.model.Workspace
 import com.f2a.authenticator.security.PinConfigResult
@@ -70,14 +77,28 @@ fun AddWorkspaceDialog(
     onDismiss: () -> Unit,
     onAdd: (String) -> Unit
 ) {
+    val semantic = LocalSemanticColors.current
+    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
     var newWsName by remember { mutableStateOf("") }
+
     Dialog(onDismissRequest = onDismiss) {
         Card(
             shape = RoundedCornerShape(Radius.XL),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            modifier = Modifier.padding(Space.L)
+            colors = CardDefaults.cardColors(containerColor = semantic.surfaceElevated),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = Space.M)
+                .border(1.dp, semantic.borderSubtle, RoundedCornerShape(Radius.XL))
         ) {
-            Column(modifier = Modifier.padding(Space.XXL)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = screenHeight * 0.88f)
+                    .verticalScroll(rememberScrollState())
+                    .imePadding()
+                    .navigationBarsPadding()
+                    .padding(Space.XL)
+            ) {
                 Text("新增工作区", style = Type.TitleSection)
                 Spacer(modifier = Modifier.height(Space.M))
                 OutlinedTextField(
@@ -110,14 +131,28 @@ fun RenameWorkspaceDialog(
     onDismiss: () -> Unit,
     onRename: (String) -> Unit
 ) {
+    val semantic = LocalSemanticColors.current
+    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
     var name by remember(workspace.id) { mutableStateOf(workspace.name) }
+
     Dialog(onDismissRequest = onDismiss) {
         Card(
             shape = RoundedCornerShape(Radius.XL),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            modifier = Modifier.padding(Space.L)
+            colors = CardDefaults.cardColors(containerColor = semantic.surfaceElevated),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = Space.M)
+                .border(1.dp, semantic.borderSubtle, RoundedCornerShape(Radius.XL))
         ) {
-            Column(modifier = Modifier.padding(Space.XXL)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = screenHeight * 0.88f)
+                    .verticalScroll(rememberScrollState())
+                    .imePadding()
+                    .navigationBarsPadding()
+                    .padding(Space.XL)
+            ) {
                 Text("重命名工作区", style = Type.TitleSection)
                 Spacer(modifier = Modifier.height(Space.M))
                 OutlinedTextField(
@@ -154,27 +189,31 @@ fun DeleteWorkspaceConfirmDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("确认删除工作区？") },
+        shape = RoundedCornerShape(Radius.XL),
+        title = { Text("确认删除工作区？", style = Type.TitleSection) },
         text = {
             Text(
                 if (affectedTokenCount > 0) {
                     "将永久删除工作区「${workspace.name}」，其下 $affectedTokenCount 个凭据将自动迁移至「$fallbackWorkspaceName」，凭据不会丢失。"
                 } else {
                     "确认删除空工作区「${workspace.name}」吗？"
-                }
+                },
+                style = Type.BodyM
             )
         },
         confirmButton = {
             Button(
                 onClick = onConfirm,
+                shape = RoundedCornerShape(Radius.M),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.error,
                     contentColor = MaterialTheme.colorScheme.onError
-                )
+                ),
+                modifier = Modifier.heightIn(min = Touch.MinTarget)
             ) { Text("确认删除") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = Touch.MinTarget)) { Text("取消") }
         }
     )
 }
@@ -187,19 +226,22 @@ fun DeleteTagSettingConfirmDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("确认删除标签？") },
-        text = { Text("确认删除标签「${tag.name}」吗？所有绑定该标签的账号将自动解除绑定，账号本身不会受到影响。") },
+        shape = RoundedCornerShape(Radius.XL),
+        title = { Text("确认删除标签？", style = Type.TitleSection) },
+        text = { Text("确认删除标签「${tag.name}」吗？所有绑定该标签的账号将自动解除绑定，账号本身不会受到影响。", style = Type.BodyM) },
         confirmButton = {
             Button(
                 onClick = onConfirm,
+                shape = RoundedCornerShape(Radius.M),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.error,
                     contentColor = MaterialTheme.colorScheme.onError
-                )
+                ),
+                modifier = Modifier.heightIn(min = Touch.MinTarget)
             ) { Text("确认删除") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = Touch.MinTarget)) { Text("取消") }
         }
     )
 }
@@ -238,7 +280,7 @@ fun PinField(
 fun formatPinConfigError(res: PinConfigResult): String = when (res) {
     PinConfigResult.Ok -> ""
     PinConfigResult.InvalidFormat -> "请输入 6 位纯数字密码"
-    PinConfigResult.WeakPin -> "密码过于简单，请勿使用全同或连续数字"
+    PinConfigResult.WeakPin -> "密码过于简单，请勿使用全同、连续或重复模式数字"
     PinConfigResult.SameAsCounterpart -> "胁迫密码不能与主密码相同"
     is PinConfigResult.AuthFailed -> formatVerifyError(res.verifyResult)
 }
@@ -255,10 +297,12 @@ fun formatVerifyError(res: SecurityLockManager.VerifyResult): String = when (res
 @Composable
 fun ChangeMasterPinDialog(
     onDismiss: () -> Unit,
+    onDuressTriggered: () -> Unit = {},
     onSelfDestructed: () -> Unit = {},
     onChangePin: (current: String, next: String, onResult: (PinConfigResult) -> Unit) -> Unit
 ) {
     val semantic = LocalSemanticColors.current
+    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
     // 【安全红线】敏感 PIN 严禁使用 rememberSaveable
     var currentPin by remember { mutableStateOf("") }
     var newPin by remember { mutableStateOf("") }
@@ -266,132 +310,255 @@ fun ChangeMasterPinDialog(
     var errorMsg by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("修改保险库主密码") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(Space.S)) {
-                PinField(value = currentPin, onValueChange = { currentPin = it; errorMsg = "" }, label = "当前 6 位主密码")
-                PinField(value = newPin, onValueChange = { newPin = it; errorMsg = "" }, label = "新 6 位主密码")
-                PinField(value = confirmPin, onValueChange = { confirmPin = it; errorMsg = "" }, label = "再次确认新密码")
-                if (errorMsg.isNotEmpty()) {
-                    Text(text = "⚠ $errorMsg", color = semantic.errorText, style = Type.BodyS, fontWeight = FontWeight.Bold)
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                enabled = !busy && currentPin.length == 6 && newPin.length == 6 && confirmPin.length == 6,
-                onClick = {
-                    if (newPin != confirmPin) {
-                        errorMsg = "两次输入的新密码不一致"
-                        return@Button
-                    }
-                    busy = true
-                    onChangePin(currentPin, newPin) { res ->
-                        busy = false
-                        when {
-                            res is PinConfigResult.Ok -> onDismiss()
-                            res is PinConfigResult.AuthFailed &&
-                                res.verifyResult is SecurityLockManager.VerifyResult.DuressTriggered -> onDismiss()
-                            res is PinConfigResult.AuthFailed &&
-                                res.verifyResult is SecurityLockManager.VerifyResult.SelfDestructed -> {
-                                onDismiss()
-                                onSelfDestructed()
-                            }
-                            else -> errorMsg = formatPinConfigError(res)
-                        }
+    Dialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn)
+    ) {
+        Card(
+            shape = RoundedCornerShape(Radius.XL),
+            colors = CardDefaults.cardColors(containerColor = semantic.surfaceElevated),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = Space.M)
+                .border(1.dp, semantic.borderSubtle, RoundedCornerShape(Radius.XL))
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = screenHeight * 0.88f)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = Space.XL, end = Space.S, top = Space.S),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("修改保险库主密码", style = Type.TitleSection, modifier = Modifier.weight(1f))
+                    IconButton(onClick = onDismiss, enabled = !busy, modifier = Modifier.size(Touch.MinTarget)) {
+                        Icon(Icons.Default.Close, contentDescription = "关闭", modifier = Modifier.size(IconSize.M))
                     }
                 }
-            ) { Text("确认修改") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        }
-    )
-}
 
-@Composable
-fun ConfigureDuressPinDialog(
-    hasDuressPin: Boolean,
-    onDismiss: () -> Unit,
-    onSelfDestructed: () -> Unit = {},
-    onSetDuressPin: (masterPin: String, duressPin: String, onResult: (PinConfigResult) -> Unit) -> Unit,
-    onClearDuressPin: (masterPin: String, onResult: (PinConfigResult) -> Unit) -> Unit
-) {
-    val semantic = LocalSemanticColors.current
-    var masterPin by remember { mutableStateOf("") }
-    var duressPin by remember { mutableStateOf("") }
-    var errorMsg by remember { mutableStateOf("") }
-    var busy by remember { mutableStateOf(false) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (hasDuressPin) "管理胁迫销毁密码" else "设置胁迫销毁密码") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(Space.S)) {
-                Text(
-                    text = "在锁屏输入胁迫密码将静默抹除本地密钥并进入空库伪装态（不可与主密码相同）。",
-                    style = Type.BodyS,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                PinField(value = masterPin, onValueChange = { masterPin = it; errorMsg = "" }, label = "当前 6 位主密码")
-                PinField(value = duressPin, onValueChange = { duressPin = it; errorMsg = "" }, label = "新 6 位胁迫密码（设置/更新时填写）")
-                if (errorMsg.isNotEmpty()) {
-                    Text(text = "⚠ $errorMsg", color = semantic.errorText, style = Type.BodyS, fontWeight = FontWeight.Bold)
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                enabled = !busy && masterPin.length == 6 && duressPin.length == 6,
-                onClick = {
-                    busy = true
-                    onSetDuressPin(masterPin, duressPin) { res ->
-                        busy = false
-                        when {
-                            res is PinConfigResult.Ok -> onDismiss()
-                            res is PinConfigResult.AuthFailed &&
-                                res.verifyResult is SecurityLockManager.VerifyResult.DuressTriggered -> onDismiss()
-                            res is PinConfigResult.AuthFailed &&
-                                res.verifyResult is SecurityLockManager.VerifyResult.SelfDestructed -> {
-                                onDismiss()
-                                onSelfDestructed()
-                            }
-                            else -> errorMsg = formatPinConfigError(res)
-                        }
+                Column(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState())
+                        .imePadding()
+                        .padding(horizontal = Space.XL),
+                    verticalArrangement = Arrangement.spacedBy(Space.S)
+                ) {
+                    PinField(value = currentPin, onValueChange = { currentPin = it; errorMsg = "" }, label = "当前 6 位主密码")
+                    PinField(value = newPin, onValueChange = { newPin = it; errorMsg = "" }, label = "新 6 位主密码")
+                    PinField(value = confirmPin, onValueChange = { confirmPin = it; errorMsg = "" }, label = "再次确认新密码")
+                    if (errorMsg.isNotEmpty()) {
+                        Text(text = errorMsg, color = semantic.errorText, style = Type.BodyS, fontWeight = FontWeight.SemiBold)
                     }
+                    Spacer(modifier = Modifier.height(Space.XS))
                 }
-            ) { Text("保存胁迫码") }
-        },
-        dismissButton = {
-            Row {
-                if (hasDuressPin) {
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(horizontal = Space.XL, vertical = Space.M),
+                    horizontalArrangement = Arrangement.End
+                ) {
                     TextButton(
-                        enabled = !busy && masterPin.length == 6,
+                        enabled = !busy,
+                        onClick = onDismiss,
+                        modifier = Modifier.heightIn(min = Touch.MinTarget)
+                    ) { Text("取消") }
+                    Spacer(modifier = Modifier.width(Space.S))
+                    Button(
+                        enabled = !busy && currentPin.length == 6 && newPin.length == 6 && confirmPin.length == 6,
                         onClick = {
+                            if (newPin != confirmPin) {
+                                errorMsg = "两次输入的新密码不一致"
+                                return@Button
+                            }
                             busy = true
-                            onClearDuressPin(masterPin) { res ->
+                            onChangePin(currentPin, newPin) { res ->
                                 busy = false
                                 when {
-                                    res is PinConfigResult.Ok -> onDismiss()
+                                    res is PinConfigResult.Ok -> {
+                                        currentPin = ""; newPin = ""; confirmPin = ""
+                                        onDismiss()
+                                    }
                                     res is PinConfigResult.AuthFailed &&
-                                        res.verifyResult is SecurityLockManager.VerifyResult.DuressTriggered -> onDismiss()
+                                        res.verifyResult is SecurityLockManager.VerifyResult.DuressTriggered -> {
+                                        currentPin = ""; newPin = ""; confirmPin = ""
+                                        onDismiss()
+                                        onDuressTriggered()
+                                    }
                                     res is PinConfigResult.AuthFailed &&
                                         res.verifyResult is SecurityLockManager.VerifyResult.SelfDestructed -> {
+                                        currentPin = ""; newPin = ""; confirmPin = ""
                                         onDismiss()
                                         onSelfDestructed()
                                     }
                                     else -> errorMsg = formatPinConfigError(res)
                                 }
                             }
-                        }
-                    ) { Text("关闭胁迫码", color = semantic.errorText) }
+                        },
+                        shape = RoundedCornerShape(Radius.M),
+                        modifier = Modifier.heightIn(min = Touch.MinTarget)
+                    ) { Text("确认修改") }
                 }
-                TextButton(onClick = onDismiss) { Text("取消") }
             }
         }
-    )
+    }
+}
+
+@Composable
+fun ConfigureDuressPinDialog(
+    hasDuressPin: Boolean,
+    onDismiss: () -> Unit,
+    onDuressTriggered: () -> Unit = {},
+    onSelfDestructed: () -> Unit = {},
+    onSetDuressPin: (masterPin: String, duressPin: String, onResult: (PinConfigResult) -> Unit) -> Unit,
+    onClearDuressPin: (masterPin: String, onResult: (PinConfigResult) -> Unit) -> Unit
+) {
+    val semantic = LocalSemanticColors.current
+    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+    var masterPin by remember { mutableStateOf("") }
+    var duressPin by remember { mutableStateOf("") }
+    var errorMsg by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+
+    Dialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn)
+    ) {
+        Card(
+            shape = RoundedCornerShape(Radius.XL),
+            colors = CardDefaults.cardColors(containerColor = semantic.surfaceElevated),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = Space.M)
+                .border(1.dp, semantic.borderSubtle, RoundedCornerShape(Radius.XL))
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = screenHeight * 0.88f)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = Space.XL, end = Space.S, top = Space.S),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = if (hasDuressPin) "管理胁迫销毁密码" else "设置胁迫销毁密码",
+                        style = Type.TitleSection,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(onClick = onDismiss, enabled = !busy, modifier = Modifier.size(Touch.MinTarget)) {
+                        Icon(Icons.Default.Close, contentDescription = "关闭", modifier = Modifier.size(IconSize.M))
+                    }
+                }
+
+                Column(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState())
+                        .imePadding()
+                        .padding(horizontal = Space.XL),
+                    verticalArrangement = Arrangement.spacedBy(Space.S)
+                ) {
+                    Text(
+                        text = "在锁屏输入胁迫密码将静默抹除本地密钥并进入空库伪装态（不可与主密码相同）。",
+                        style = Type.BodyS,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    PinField(value = masterPin, onValueChange = { masterPin = it; errorMsg = "" }, label = "当前 6 位主密码")
+                    PinField(value = duressPin, onValueChange = { duressPin = it; errorMsg = "" }, label = "新 6 位胁迫密码（设置/更新时填写）")
+                    if (errorMsg.isNotEmpty()) {
+                        Text(text = errorMsg, color = semantic.errorText, style = Type.BodyS, fontWeight = FontWeight.SemiBold)
+                    }
+                    Spacer(modifier = Modifier.height(Space.XS))
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(horizontal = Space.XL, vertical = Space.M),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (hasDuressPin) {
+                        TextButton(
+                            enabled = !busy && masterPin.length == 6,
+                            onClick = {
+                                busy = true
+                                onClearDuressPin(masterPin) { res ->
+                                    busy = false
+                                    when {
+                                        res is PinConfigResult.Ok -> {
+                                            masterPin = ""; duressPin = ""
+                                            onDismiss()
+                                        }
+                                        res is PinConfigResult.AuthFailed &&
+                                            res.verifyResult is SecurityLockManager.VerifyResult.DuressTriggered -> {
+                                            masterPin = ""; duressPin = ""
+                                            onDismiss()
+                                            onDuressTriggered()
+                                        }
+                                        res is PinConfigResult.AuthFailed &&
+                                            res.verifyResult is SecurityLockManager.VerifyResult.SelfDestructed -> {
+                                            masterPin = ""; duressPin = ""
+                                            onDismiss()
+                                            onSelfDestructed()
+                                        }
+                                        else -> errorMsg = formatPinConfigError(res)
+                                    }
+                                }
+                            },
+                            modifier = Modifier.heightIn(min = Touch.MinTarget)
+                        ) { Text("关闭胁迫码", color = semantic.errorText) }
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                    TextButton(
+                        enabled = !busy,
+                        onClick = onDismiss,
+                        modifier = Modifier.heightIn(min = Touch.MinTarget)
+                    ) { Text("取消") }
+                    Spacer(modifier = Modifier.width(Space.S))
+                    Button(
+                        enabled = !busy && masterPin.length == 6 && duressPin.length == 6,
+                        onClick = {
+                            busy = true
+                            onSetDuressPin(masterPin, duressPin) { res ->
+                                busy = false
+                                when {
+                                    res is PinConfigResult.Ok -> {
+                                        masterPin = ""; duressPin = ""
+                                        onDismiss()
+                                    }
+                                    res is PinConfigResult.AuthFailed &&
+                                        res.verifyResult is SecurityLockManager.VerifyResult.DuressTriggered -> {
+                                        masterPin = ""; duressPin = ""
+                                        onDismiss()
+                                        onDuressTriggered()
+                                    }
+                                    res is PinConfigResult.AuthFailed &&
+                                        res.verifyResult is SecurityLockManager.VerifyResult.SelfDestructed -> {
+                                        masterPin = ""; duressPin = ""
+                                        onDismiss()
+                                        onSelfDestructed()
+                                    }
+                                    else -> errorMsg = formatPinConfigError(res)
+                                }
+                            }
+                        },
+                        shape = RoundedCornerShape(Radius.M),
+                        modifier = Modifier.heightIn(min = Touch.MinTarget)
+                    ) { Text("保存胁迫码") }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -408,10 +575,11 @@ fun TrashManagerDialog(
     Dialog(onDismissRequest = onDismiss) {
         Card(
             shape = RoundedCornerShape(Radius.XL),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            colors = CardDefaults.cardColors(containerColor = semantic.surfaceElevated),
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = Space.M)
+                .border(1.dp, semantic.borderSubtle, RoundedCornerShape(Radius.XL))
         ) {
             Column(
                 modifier = Modifier
@@ -421,7 +589,7 @@ fun TrashManagerDialog(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = Space.XXL, end = Space.S, top = Space.S),
+                        .padding(start = Space.XL, end = Space.S, top = Space.S),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("回收站（7 天保留）", style = Type.TitleSection, modifier = Modifier.weight(1f))
@@ -435,7 +603,7 @@ fun TrashManagerDialog(
                         icon = Icons.Default.DeleteSweep,
                         title = "回收站为空",
                         description = "删除的凭据会在此保留 7 天，随时可恢复",
-                        modifier = Modifier.padding(horizontal = Space.XXL)
+                        modifier = Modifier.padding(horizontal = Space.XL)
                     )
                 } else {
                     LazyColumn(
@@ -443,7 +611,11 @@ fun TrashManagerDialog(
                             .weight(1f, fill = false)
                             .padding(horizontal = Space.L)
                     ) {
-                        items(items, key = { it.token.id }) { item ->
+                        items(
+                            items = items,
+                            key = { it.token.id },
+                            contentType = { "trash_item" }
+                        ) { item ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -484,7 +656,7 @@ fun TrashManagerDialog(
                                     )
                                 }
                             }
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                            HorizontalDivider(color = semantic.borderSubtle)
                         }
                     }
                 }
@@ -492,16 +664,24 @@ fun TrashManagerDialog(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = Space.XXL, vertical = Space.M),
+                        .navigationBarsPadding()
+                        .padding(horizontal = Space.XL, vertical = Space.M),
                     horizontalArrangement = Arrangement.End
                 ) {
                     if (items.isNotEmpty()) {
-                        TextButton(onClick = onEmptyTrash) {
+                        TextButton(
+                            onClick = onEmptyTrash,
+                            modifier = Modifier.heightIn(min = Touch.MinTarget)
+                        ) {
                             Text("清空回收站", color = semantic.errorText)
                         }
                         Spacer(modifier = Modifier.width(Space.S))
                     }
-                    Button(onClick = onDismiss, shape = RoundedCornerShape(Radius.M)) {
+                    Button(
+                        onClick = onDismiss,
+                        shape = RoundedCornerShape(Radius.M),
+                        modifier = Modifier.heightIn(min = Touch.MinTarget)
+                    ) {
                         Text("关闭")
                     }
                 }
@@ -513,6 +693,7 @@ fun TrashManagerDialog(
 @Composable
 fun ConfirmClearTokensDialog(
     onDismiss: () -> Unit,
+    onDuressTriggered: () -> Unit = {},
     onSelfDestructed: () -> Unit = {},
     onVerifyAndClear: (pin: String, onResult: (SecurityLockManager.VerifyResult) -> Unit) -> Unit
 ) {
@@ -523,12 +704,14 @@ fun ConfirmClearTokensDialog(
     var busy by remember { mutableStateOf(false) }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!busy) onDismiss() },
+        properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn),
+        shape = RoundedCornerShape(Radius.XL),
         icon = { Icon(Icons.Default.Warning, contentDescription = "警告", tint = MaterialTheme.colorScheme.error) },
-        title = { Text("确认清空全部 2FA 凭据？", fontWeight = FontWeight.Bold) },
+        title = { Text("确认清空全部 2FA 凭据？", style = Type.TitleSection) },
         text = {
-            Column {
-                Text("此操作将永久清空当前保险库内所有动态验证码，请确认已提前完成灾备导出！")
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text("此操作将永久清空当前保险库内所有动态验证码，请确认已提前完成灾备导出！", style = Type.BodyM)
                 Spacer(modifier = Modifier.height(Space.MS))
                 PinField(
                     value = clearPasswordConfirm,
@@ -537,7 +720,7 @@ fun ConfirmClearTokensDialog(
                 )
                 if (clearError.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(Space.XS))
-                    Text(clearError, color = semantic.errorText, style = Type.BodyS, fontWeight = FontWeight.Bold)
+                    Text(clearError, color = semantic.errorText, style = Type.BodyS, fontWeight = FontWeight.SemiBold)
                 }
             }
         },
@@ -549,9 +732,17 @@ fun ConfirmClearTokensDialog(
                     onVerifyAndClear(clearPasswordConfirm) { verify ->
                         busy = false
                         when (verify) {
-                            is SecurityLockManager.VerifyResult.Success,
-                            is SecurityLockManager.VerifyResult.DuressTriggered -> onDismiss()
+                            is SecurityLockManager.VerifyResult.Success -> {
+                                clearPasswordConfirm = ""
+                                onDismiss()
+                            }
+                            is SecurityLockManager.VerifyResult.DuressTriggered -> {
+                                clearPasswordConfirm = ""
+                                onDismiss()
+                                onDuressTriggered()
+                            }
                             is SecurityLockManager.VerifyResult.SelfDestructed -> {
+                                clearPasswordConfirm = ""
                                 onDismiss()
                                 onSelfDestructed()
                             }
@@ -559,14 +750,20 @@ fun ConfirmClearTokensDialog(
                         }
                     }
                 },
+                shape = RoundedCornerShape(Radius.M),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.error,
                     contentColor = MaterialTheme.colorScheme.onError
-                )
+                ),
+                modifier = Modifier.heightIn(min = Touch.MinTarget)
             ) { Text("确认清空") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(
+                enabled = !busy,
+                onClick = onDismiss,
+                modifier = Modifier.heightIn(min = Touch.MinTarget)
+            ) { Text("取消") }
         }
     )
 }
@@ -582,20 +779,23 @@ fun SelfDestructInputDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn),
+        shape = RoundedCornerShape(Radius.XL),
         icon = { Icon(Icons.Default.Warning, contentDescription = "自毁警告", tint = MaterialTheme.colorScheme.error) },
-        title = { Text("⚠️ 触发自毁程序（第 2/3 步）", fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.error) },
+        title = { Text("触发自毁程序（第 2/3 步）", style = Type.TitleSection, color = MaterialTheme.colorScheme.error) },
         text = {
-            Column {
-                Text("此操作将注销并永久抹除硬件主密钥使本地密文永久不可解，并删除本地数据文件。此操作不可恢复！")
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text("此操作将注销并永久抹除硬件主密钥使本地密文永久不可解，并删除本地数据文件。此操作不可恢复！", style = Type.BodyM)
                 Spacer(modifier = Modifier.height(Space.MS))
-                Text("请输入「$confirmWord」四个字以继续：", style = Type.BodyS, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
+                Text("请输入「$confirmWord」四个字以继续：", style = Type.BodyS, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.error)
                 Spacer(modifier = Modifier.height(Space.S))
                 OutlinedTextField(
                     value = inputText,
                     onValueChange = { inputText = it },
                     label = { Text("输入 $confirmWord") },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(Radius.S)
                 )
             }
         },
@@ -603,14 +803,16 @@ fun SelfDestructInputDialog(
             Button(
                 onClick = onConfirmed,
                 enabled = canProceed,
+                shape = RoundedCornerShape(Radius.M),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.error,
                     contentColor = MaterialTheme.colorScheme.onError
-                )
+                ),
+                modifier = Modifier.heightIn(min = Touch.MinTarget)
             ) { Text("下一步") }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("放弃") }
+            TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = Touch.MinTarget)) { Text("放弃") }
         }
     )
 }
@@ -631,28 +833,33 @@ fun SelfDestructCountdownDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn),
+        shape = RoundedCornerShape(Radius.XL),
         icon = { Icon(Icons.Default.Warning, contentDescription = "自毁倒计时", tint = MaterialTheme.colorScheme.error) },
-        title = { Text("⚠️ 最终确认（第 3/3 步）", fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.error) },
+        title = { Text("最终确认（第 3/3 步）", style = Type.TitleSection, color = MaterialTheme.colorScheme.error) },
         text = {
             Text(
                 if (countdown > 0) "倒计时结束后方可引爆：$countdown 秒…\n此操作不可恢复，请确认已做好全部灾备。"
-                else "倒计时已结束，可立即引爆。此操作不可恢复！"
+                else "倒计时已结束，可立即引爆。此操作不可恢复！",
+                style = Type.BodyM
             )
         },
         confirmButton = {
             Button(
                 onClick = onExecuteDestruct,
                 enabled = countdown <= 0,
+                shape = RoundedCornerShape(Radius.M),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.error,
                     contentColor = MaterialTheme.colorScheme.onError
-                )
+                ),
+                modifier = Modifier.heightIn(min = Touch.MinTarget)
             ) {
                 Text(if (countdown > 0) "请等待 $countdown 秒" else "立即引爆自毁")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = Touch.MinTarget)) { Text("取消") }
         }
     )
 }

@@ -12,13 +12,18 @@ import com.f2a.authenticator.data.model.Tag
 import com.f2a.authenticator.data.model.TokenType
 import com.f2a.authenticator.data.model.VaultPreferences
 import com.f2a.authenticator.data.model.Workspace
+import com.f2a.authenticator.security.Clock
 import com.f2a.authenticator.security.SecurityLockManager
+import com.f2a.authenticator.security.SystemClockImpl
 import com.f2a.authenticator.ui.state.HomeUiState
 import com.f2a.authenticator.ui.state.IssuerGroupUi
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -27,7 +32,9 @@ import java.util.Locale
 class HomeViewModel(
     private val tokenRepository: TokenVaultRepository,
     private val preferencesRepository: VaultPreferencesRepository,
-    private val securityManager: SecurityLockManager
+    private val securityManager: SecurityLockManager,
+    private val clock: Clock = SystemClockImpl,
+    computeDispatcher: CoroutineDispatcher = Dispatchers.Default
 ) : ViewModel() {
 
     private val activeWorkspaceIdFlow = MutableStateFlow(
@@ -46,6 +53,8 @@ class HomeViewModel(
         tokenRepository.tags,
         tokenRepository.tokens,
         tokenRepository.isLoaded,
+        tokenRepository.isWiped,
+        tokenRepository.vaultLoadCorrupted,
         preferencesRepository.preferences,
         activeWorkspaceIdFlow,
         selectedTagFilterIdFlow,
@@ -61,14 +70,16 @@ class HomeViewModel(
         @Suppress("UNCHECKED_CAST")
         val tokens = values[2] as List<AuthToken>
         val isLoaded = values[3] as Boolean
-        val prefs = values[4] as VaultPreferences
-        val activeWsId = values[5] as String
-        val selectedTagId = values[6] as String?
-        val searchExpanded = values[7] as Boolean
-        val query = values[8] as String
+        val isWiped = values[4] as Boolean
+        val vaultLoadCorrupted = values[5] as Boolean
+        val prefs = values[6] as VaultPreferences
+        val activeWsId = values[7] as String
+        val selectedTagId = values[8] as String?
+        val searchExpanded = values[9] as Boolean
+        val query = values[10] as String
         @Suppress("UNCHECKED_CAST")
-        val sessionExpandedMap = values[9] as Map<String, Set<String>>
-        val clipSec = values[10] as Int
+        val sessionExpandedMap = values[11] as Map<String, Set<String>>
+        val clipSec = values[12] as Int
 
         val isFiltering = query.isNotBlank() || selectedTagId != null
         val tagMap = tags.associateBy { it.id }
@@ -100,17 +111,26 @@ class HomeViewModel(
             val rawGroups = filtered.groupBy { it.issuer.trim().lowercase(Locale.US) }
             rawGroups.map { (key, groupTokens) ->
                 val displayIssuer = pickNormalizedIssuerName(groupTokens)
-                val sortedAccounts = groupTokens.sortedWith(
-                    compareByDescending<AuthToken> { it.isPinned }
-                        .thenBy { it.sortOrder }
-                        .thenBy { it.accountName.lowercase(Locale.US) }
-                )
+                val sortedAccounts = when (prefs.sortMode) {
+                    SortMode.RECENTLY_USED -> groupTokens.sortedWith(
+                        compareByDescending<AuthToken> { it.isPinned }
+                            .thenByDescending { it.lastUsedAt }
+                            .thenByDescending { it.usageCount }
+                            .thenBy { it.sortOrder }
+                            .thenBy { it.accountName.lowercase(Locale.US) }
+                    )
+                    else -> groupTokens.sortedWith(
+                        compareByDescending<AuthToken> { it.isPinned }
+                            .thenBy { it.sortOrder }
+                            .thenBy { it.accountName.lowercase(Locale.US) }
+                    )
+                }
                 val hasPinned = sortedAccounts.any { it.isPinned }
                 val isAllHotp = sortedAccounts.all { it.type == TokenType.HOTP }
                 val totpPeriods = sortedAccounts.filter { it.type != TokenType.HOTP }.map { it.period }.distinct()
                 val hasMixedPeriods = totpPeriods.size > 1 || (totpPeriods.isNotEmpty() && sortedAccounts.any { it.type == TokenType.HOTP })
                 val headerPeriod = totpPeriods.firstOrNull() ?: 30
-                val lastActivity = sortedAccounts.maxOfOrNull { maxOf(it.lastUsedAt, it.updatedAt) } ?: 0L
+                val lastActivity = sortedAccounts.maxOfOrNull { it.lastUsedAt } ?: 0L
 
                 val isExpanded = if (isFiltering) {
                     true
@@ -146,6 +166,7 @@ class HomeViewModel(
                     SortMode.ALPHABETICAL_AZ -> list.sortedBy { it.issuer.lowercase(Locale.US) }
                     SortMode.RECENTLY_USED -> list.sortedWith(
                         compareByDescending<IssuerGroupUi> { it.lastActivityAt }
+                            .thenByDescending { group -> group.accounts.maxOfOrNull { it.usageCount } ?: 0 }
                             .thenBy { it.issuer.lowercase(Locale.US) }
                     )
                 }
@@ -156,6 +177,17 @@ class HomeViewModel(
         val groupsByWs = workspaceIds.associateWith { wsId -> buildGroupsForWs(wsId) }
         val groups = groupsByWs[resolvedActiveWsId] ?: buildGroupsForWs(resolvedActiveWsId)
         val allExpanded = groups.isNotEmpty() && groups.all { it.isExpanded }
+
+        val nowMs = clock.currentTimeMillis()
+        val lastBackupMs = prefs.lastBackupAtMillis
+        val daysSinceBackup = if (lastBackupMs != null && lastBackupMs > 0L) {
+            ((nowMs - lastBackupMs).coerceAtLeast(0L) / DAY_MILLIS).toInt()
+        } else {
+            null
+        }
+        val backupOverdue = isLoaded &&
+            tokens.isNotEmpty() &&
+            (lastBackupMs == null || (daysSinceBackup ?: 0) >= BACKUP_OVERDUE_DAYS)
 
         HomeUiState(
             workspaces = workspaces,
@@ -171,21 +203,29 @@ class HomeViewModel(
             groupsByWorkspace = groupsByWs,
             allExpanded = allExpanded,
             clipboardClearSeconds = clipSec,
-            isLoaded = isLoaded
+            isLoaded = isLoaded || isWiped,
+            privacyMaskEnabled = prefs.privacyMaskEnabled,
+            backupOverdueBanner = backupOverdue,
+            daysSinceLastBackup = daysSinceBackup,
+            vaultLoadCorrupted = vaultLoadCorrupted
         )
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000L),
-        initialValue = HomeUiState(
-            workspaces = tokenRepository.workspaces.value,
-            activeWorkspaceId = preferencesRepository.preferences.value.lastActiveWorkspaceId.ifBlank { "all" },
-            tags = tokenRepository.tags.value,
-            sortMode = preferencesRepository.preferences.value.sortMode,
-            collapsePolicy = preferencesRepository.preferences.value.collapsePolicy,
-            clipboardClearSeconds = securityManager.getClipboardClearSeconds(),
-            isLoaded = tokenRepository.isLoaded.value
+    }
+        .flowOn(computeDispatcher)
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000L),
+            initialValue = HomeUiState(
+                workspaces = tokenRepository.workspaces.value,
+                activeWorkspaceId = preferencesRepository.preferences.value.lastActiveWorkspaceId.ifBlank { "all" },
+                tags = tokenRepository.tags.value,
+                sortMode = preferencesRepository.preferences.value.sortMode,
+                collapsePolicy = preferencesRepository.preferences.value.collapsePolicy,
+                clipboardClearSeconds = securityManager.getClipboardClearSeconds(),
+                isLoaded = tokenRepository.isLoaded.value || tokenRepository.isWiped.value,
+                privacyMaskEnabled = preferencesRepository.preferences.value.privacyMaskEnabled,
+                vaultLoadCorrupted = tokenRepository.vaultLoadCorrupted.value
+            )
         )
-    )
 
     private fun resolveExpandedState(
         policy: CollapsePolicy,
@@ -230,6 +270,7 @@ class HomeViewModel(
     }
 
     fun setActiveWorkspaceId(workspaceId: String) {
+        if (activeWorkspaceIdFlow.value == workspaceId) return
         activeWorkspaceIdFlow.value = workspaceId
         preferencesRepository.setLastActiveWorkspaceId(workspaceId)
     }
@@ -243,6 +284,22 @@ class HomeViewModel(
 
     fun setSearchQuery(query: String) {
         searchQueryFlow.value = query
+    }
+
+    fun clearSearch() {
+        searchQueryFlow.value = ""
+    }
+
+    fun togglePrivacyMask() {
+        val next = !preferencesRepository.preferences.value.privacyMaskEnabled
+        preferencesRepository.setPrivacyMaskEnabled(next)
+    }
+
+    fun resetSessionUiState() {
+        searchQueryFlow.value = ""
+        isSearchExpandedFlow.value = false
+        selectedTagFilterIdFlow.value = null
+        sessionExpandedByWsFlow.value = emptyMap()
     }
 
     fun selectTagFilter(tagId: String?) {
@@ -344,11 +401,17 @@ class HomeViewModel(
     class Factory(
         private val tokenRepository: TokenVaultRepository,
         private val preferencesRepository: VaultPreferencesRepository,
-        private val securityManager: SecurityLockManager
+        private val securityManager: SecurityLockManager,
+        private val clock: Clock = SystemClockImpl
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return HomeViewModel(tokenRepository, preferencesRepository, securityManager) as T
+            return HomeViewModel(tokenRepository, preferencesRepository, securityManager, clock) as T
         }
+    }
+
+    private companion object {
+        const val DAY_MILLIS = 24L * 60 * 60 * 1000
+        const val BACKUP_OVERDUE_DAYS = 30
     }
 }

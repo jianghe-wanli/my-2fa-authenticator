@@ -70,4 +70,26 @@ class WorkspaceInferenceEngineTest {
             assertEquals("Issuer '$issuer' should fall back to personal", Workspace.DEFAULT_PERSONAL.id, wsId)
         }
     }
+
+    @Test
+    fun expandedDictionariesAndCustomWorkspace_matchedAccurately() {
+        val customWs = Workspace(id = "ws_crypto", name = "数字钱包", orderIndex = 3)
+        val allWs = workspaces + customWs
+
+        assertEquals(
+            Workspace.DEFAULT_DEVOPS.id,
+            WorkspaceInferenceEngine.inferWorkspaceId("Vercel", "ops@team.io", "all", allWs)
+        )
+        assertEquals(
+            Workspace.DEFAULT_WORK.id,
+            WorkspaceInferenceEngine.inferWorkspaceId("Notion", "alice@company.io", "all", allWs)
+        )
+        assertEquals(
+            "ws_crypto",
+            WorkspaceInferenceEngine.inferWorkspaceId("Ledger 数字钱包", "main", "all", allWs)
+        )
+
+        val binance = WorkspaceInferenceEngine.infer("Binance", "main@mail.com", "", "all", allWs)
+        assertTrue(Tag.TAG_ASSET.id in binance.suggestedTagIds)
+    }
 }

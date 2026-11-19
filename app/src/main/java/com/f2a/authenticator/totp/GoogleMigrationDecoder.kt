@@ -18,12 +18,15 @@ object GoogleMigrationDecoder {
         val batchIndex: Int,
         val batchSize: Int,
         val batchId: Int,
-        val version: Int
+        val version: Int,
+        val skippedUnsupportedCount: Int = 0
     )
 
     private const val BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
     private const val MAX_FIELD_LEN = 4096
     private const val MAX_TOTAL_LEN = 65536
+    private const val MAX_RAW_BASE64_LEN = 131_072
+    private const val MAX_BATCH_COUNT = 10_000
 
     private val ENV_TRAILING_REGEX =
         Regex("""\s*[\[(](Prod|Dev|Test|Stage|生产|开发|测试|预发|灰度)[\])]\s*$""", RegexOption.IGNORE_CASE)
@@ -49,6 +52,7 @@ object GoogleMigrationDecoder {
         var batchIndex = 0
         var batchId = 0
         var hasBatchSize = false
+        var skippedUnsupportedCount = 0
 
         try {
             val trimmedUri = migrationUri.trim()
@@ -60,6 +64,9 @@ object GoogleMigrationDecoder {
             val rawQuery = trimmedUri.substring(qIdx + 1).substringBefore('#')
             val query = OtpUriParser.parseQueryParams(rawQuery)
             val rawData = query["data"] ?: return MigrationBatch(emptyList(), 0, 0, 0, 1)
+            if (rawData.length > MAX_RAW_BASE64_LEN) {
+                return MigrationBatch(emptyList(), 0, 0, 0, 1)
+            }
 
             val protoBytes = decodeBase64Flexible(rawData)
                 ?: return MigrationBatch(emptyList(), 0, 0, 0, 1)
@@ -83,9 +90,10 @@ object GoogleMigrationDecoder {
                             if (declaredLong <= 0L || declaredLong > maxAllowed) break
                             val declared = declaredLong.toInt()
                             val paramBytes = readExactBytes(stream, declared) ?: break
-                            val token = parseOtpParameters(paramBytes, targetWorkspaceId)
-                            if (token != null) {
-                                result.add(token)
+                            when (val parsed = parseOtpParameters(paramBytes, targetWorkspaceId)) {
+                                is ParamParseOutcome.Ok -> result.add(parsed.token)
+                                ParamParseOutcome.Unsupported -> skippedUnsupportedCount++
+                                ParamParseOutcome.Invalid -> Unit
                             }
                         } else {
                             if (!skipField(stream, wireType)) break
@@ -100,14 +108,14 @@ object GoogleMigrationDecoder {
                     3 -> { // int32 batch_size
                         if (wireType == 0) {
                             val v = readVarint(stream) ?: break
-                            batchSize = v.toInt().coerceAtLeast(1)
+                            batchSize = v.coerceIn(1L, MAX_BATCH_COUNT.toLong()).toInt()
                             hasBatchSize = true
                         } else if (!skipField(stream, wireType)) break
                     }
                     4 -> { // int32 batch_index
                         if (wireType == 0) {
                             val v = readVarint(stream) ?: break
-                            batchIndex = v.toInt().coerceAtLeast(0)
+                            batchIndex = v.coerceIn(0L, MAX_BATCH_COUNT.toLong()).toInt()
                         } else if (!skipField(stream, wireType)) break
                     }
                     5 -> { // int32 batch_id
@@ -131,8 +139,15 @@ object GoogleMigrationDecoder {
             batchIndex = batchIndex,
             batchSize = finalBatchSize,
             batchId = batchId,
-            version = version
+            version = version,
+            skippedUnsupportedCount = skippedUnsupportedCount
         )
+    }
+
+    private sealed interface ParamParseOutcome {
+        data class Ok(val token: AuthToken) : ParamParseOutcome
+        data object Unsupported : ParamParseOutcome
+        data object Invalid : ParamParseOutcome
     }
 
     private fun decodeBase64Flexible(rawData: String): ByteArray? {
@@ -140,7 +155,7 @@ object GoogleMigrationDecoder {
             .replace("\r", "")
             .replace("\n", "")
             .replace(" ", "+")
-        if (compact.isEmpty()) return null
+        if (compact.isEmpty() || compact.length > MAX_RAW_BASE64_LEN) return null
 
         val isUrlSafe = compact.contains('-') || compact.contains('_')
         return try {
@@ -162,12 +177,13 @@ object GoogleMigrationDecoder {
         }
     }
 
-    private fun parseOtpParameters(bytes: ByteArray, workspaceId: String): AuthToken? {
+    private fun parseOtpParameters(bytes: ByteArray, workspaceId: String): ParamParseOutcome {
         val stream = ByteArrayInputStream(bytes)
         var secretBytes: ByteArray? = null
         var name = ""
         var issuer = ""
         var algorithm = "SHA1"
+        var unsupportedAlgorithm = false
         var digits = 6
         var type = TokenType.TOTP
         var counter = 0L
@@ -205,13 +221,14 @@ object GoogleMigrationDecoder {
                         issuer = String(b, StandardCharsets.UTF_8)
                     } else if (!skipField(stream, wireType)) break
                 }
-                4 -> { // algorithm (enum)
+                4 -> { // algorithm (enum: 0=UNSPECIFIED, 1=SHA1, 2=SHA256, 3=SHA512, 4=MD5)
                     if (wireType == 0) {
                         val algoVal = readVarint(stream) ?: break
-                        algorithm = when (algoVal) {
-                            2L -> "SHA256"
-                            3L -> "SHA512"
-                            else -> "SHA1"
+                        when (algoVal) {
+                            0L, 1L -> algorithm = "SHA1"
+                            2L -> algorithm = "SHA256"
+                            3L -> algorithm = "SHA512"
+                            else -> unsupportedAlgorithm = true
                         }
                     } else if (!skipField(stream, wireType)) break
                 }
@@ -238,16 +255,18 @@ object GoogleMigrationDecoder {
             }
         }
 
-        if (secretBytes == null || secretBytes.isEmpty()) return null
+        if (unsupportedAlgorithm) return ParamParseOutcome.Unsupported
+        if (secretBytes == null || secretBytes.isEmpty()) return ParamParseOutcome.Invalid
 
         // 将原始字节编码为 Base32 密钥字符串
         val base32Secret = encodeBase32(secretBytes)
+        secretBytes.fill(0)
 
-        // 安全拆分 Issuer 与 AccountName：若已显式提供 issuer 字段，优先剥离 "$issuer:" 前缀避免 issuer 含冒号被误切
+        // 安全拆分 Issuer 与 AccountName：若已显式提供 issuer 字段，优先忽略大小写剥离 "$issuer:" 前缀
         var finalIssuer = issuer.trim()
         var finalAccount = name.trim()
-        if (finalIssuer.isNotEmpty() && finalAccount.startsWith("$finalIssuer:")) {
-            finalAccount = finalAccount.removePrefix("$finalIssuer:").trim()
+        if (finalIssuer.isNotEmpty() && finalAccount.startsWith("$finalIssuer:", ignoreCase = true)) {
+            finalAccount = finalAccount.substring(finalIssuer.length + 1).trim()
         } else if (finalAccount.contains(":")) {
             val parts = finalAccount.split(":", limit = 2)
             if (finalIssuer.isEmpty()) finalIssuer = parts[0].trim()
@@ -264,17 +283,19 @@ object GoogleMigrationDecoder {
         }
         if (finalAccount.isEmpty()) finalAccount = "默认账号"
 
-        return AuthToken(
-            workspaceId = workspaceId,
-            issuer = finalIssuer,
-            accountName = finalAccount,
-            tenantEnv = detectedEnv,
-            secret = base32Secret,
-            algorithm = algorithm,
-            digits = digits,
-            type = type,
-            counter = counter,
-            note = "自 Google Authenticator 迁移"
+        return ParamParseOutcome.Ok(
+            AuthToken(
+                workspaceId = workspaceId,
+                issuer = finalIssuer,
+                accountName = finalAccount,
+                tenantEnv = detectedEnv,
+                secret = base32Secret,
+                algorithm = algorithm,
+                digits = digits,
+                type = type,
+                counter = counter,
+                note = "自 Google Authenticator 迁移"
+            )
         )
     }
 

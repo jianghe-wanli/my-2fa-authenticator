@@ -1,13 +1,15 @@
 package com.f2a.authenticator.ui.viewmodel
 
 import android.app.Application
+import android.content.Context
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.f2a.authenticator.data.model.AuthToken
-import com.f2a.authenticator.data.model.ThemeMode
+import com.f2a.authenticator.data.model.VaultPreferences
+import com.f2a.authenticator.data.model.Workspace
 import com.f2a.authenticator.di.AppContainer
 import com.f2a.authenticator.security.BiometricHelper
 import com.f2a.authenticator.security.BiometricStatus
@@ -21,8 +23,10 @@ import com.f2a.authenticator.utils.ClipboardGuard
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 class AppViewModel(
@@ -45,6 +49,17 @@ class AppViewModel(
     )
     private val flagSecureFlow = MutableStateFlow(securityManager.isFlagSecureEnabled())
     private val snackbarMessageFlow = MutableStateFlow<String?>(null)
+    private val missingPinRecoveredNoticeFlow = MutableStateFlow(false)
+    private val selfDestructedFlow = MutableStateFlow(false)
+    private val _lockSessionCounter = MutableStateFlow(0L)
+    val lockSessionCounter: StateFlow<Long> = _lockSessionCounter.asStateFlow()
+
+    init {
+        backgroundLockMonitor.setLockHandler(
+            timeoutProvider = { preferencesRepository.preferences.value.autoLockTimeout },
+            onLock = { lockNow() }
+        )
+    }
 
     private val authStateFlow = combine(isUnlockedFlow, authMetaFlow) { unlocked, meta ->
         meta.copy(isUnlocked = unlocked)
@@ -58,17 +73,24 @@ class AppViewModel(
         preferencesRepository.preferences,
         flagSecureFlow,
         snackbarMessageFlow,
-        tokenRepository.workspaces
+        tokenRepository.workspaces,
+        tokenRepository.vaultLoadCorrupted,
+        missingPinRecoveredNoticeFlow,
+        selfDestructedFlow
     ) { values ->
         val auth = values[0] as VaultAuthState
         val route = values[1] as AppRoute
         val modal = values[2] as ActiveModal
         val activeWs = values[3] as String
-        val prefs = values[4] as com.f2a.authenticator.data.model.VaultPreferences
+        val prefs = values[4] as VaultPreferences
         val flagSecure = values[5] as Boolean
         val snackbar = values[6] as String?
         @Suppress("UNCHECKED_CAST")
-        val workspaces = values[7] as List<com.f2a.authenticator.data.model.Workspace>
+        val workspaces = values[7] as List<Workspace>
+        val vaultLoadCorrupted = values[8] as Boolean
+        val missingPinRecovered = values[9] as Boolean
+        val selfDestructed = values[10] as Boolean
+
         val resolvedActiveWs = if (activeWs != "all" && workspaces.isNotEmpty() && workspaces.none { it.id == activeWs }) {
             "all"
         } else {
@@ -81,7 +103,10 @@ class AppViewModel(
             activeWorkspaceId = resolvedActiveWs,
             themeMode = prefs.themeMode,
             flagSecureEnabled = flagSecure,
-            snackbarMessage = snackbar
+            snackbarMessage = snackbar,
+            vaultLoadCorrupted = vaultLoadCorrupted,
+            missingPinRecoveredNotice = missingPinRecovered,
+            selfDestructed = selfDestructed
         )
     }.stateIn(
         scope = viewModelScope,
@@ -96,7 +121,11 @@ class AppViewModel(
     private fun readAuthMeta(): VaultAuthState {
         val ctx = getApplication<Application>()
         val isPinConfigured = securityManager.isPinConfigured()
-        val bioAvailable = BiometricHelper.checkAvailability(ctx) == BiometricStatus.AVAILABLE
+        val bioAvailable = try {
+            BiometricHelper.checkAvailability(ctx) == BiometricStatus.AVAILABLE
+        } catch (_: Throwable) {
+            false
+        }
         val missingPinAnomaly = securityManager.isPinMissingAnomaly(tokenRepository.hasStoredEncryptedTokens())
         return VaultAuthState(
             isPinConfigured = isPinConfigured,
@@ -120,13 +149,21 @@ class AppViewModel(
         return sec
     }
 
+    fun dismissMissingPinNotice() {
+        missingPinRecoveredNoticeFlow.value = false
+    }
+
     fun setupPinAndUnlock(pin: String, onResult: (PinConfigResult) -> Unit) {
         viewModelScope.launch {
+            val wasMissingAnomaly = authMetaFlow.value.missingPinAnomaly
             val result = securityManager.setupPin(pin)
             if (result is PinConfigResult.Ok) {
                 tokenRepository.unlockAndLoad()
                 backgroundLockMonitor.resetBackgroundTimer()
                 isUnlockedFlow.value = true
+                if (wasMissingAnomaly) {
+                    missingPinRecoveredNoticeFlow.value = true
+                }
                 refreshAuthState()
             } else {
                 refreshAuthState()
@@ -145,10 +182,21 @@ class AppViewModel(
                     isUnlockedFlow.value = true
                 }
                 is SecurityLockManager.VerifyResult.DuressTriggered -> {
-                    // 【安全红线】先同步清空内存密钥与 StateFlow 并阻断回写，再解锁空库/诱饵态
+                    // 【安全红线】先同步清空内存密钥、偏好与剪贴板并阻断回写，再解锁空库/诱饵态
                     tokenRepository.wipeInMemoryState()
+                    preferencesRepository.clearAllPreferences()
+                    ClipboardGuard.clearNow(getApplication())
                     backgroundLockMonitor.resetBackgroundTimer()
                     isUnlockedFlow.value = true
+                    _lockSessionCounter.update { it + 1L }
+                }
+                is SecurityLockManager.VerifyResult.SelfDestructed -> {
+                    tokenRepository.wipeInMemoryState()
+                    preferencesRepository.clearAllPreferences()
+                    ClipboardGuard.clearNow(getApplication())
+                    isUnlockedFlow.value = false
+                    selfDestructedFlow.value = true
+                    _lockSessionCounter.update { it + 1L }
                 }
                 else -> Unit
             }
@@ -162,10 +210,22 @@ class AppViewModel(
         onError: (String) -> Unit
     ) {
         if (!securityManager.isPinConfigured() || !securityManager.isBiometricEnabled()) return
+        val lockout = securityManager.getLockoutRemainingSeconds()
+        if (lockout > 0L) {
+            refreshAuthState()
+            onError("尝试过多已锁定，请 ${lockout} 秒后重试")
+            return
+        }
         BiometricHelper.authenticate(
             activity = activity,
             onSuccess = {
                 viewModelScope.launch {
+                    val verified = securityManager.onBiometricVerified()
+                    if (!verified) {
+                        refreshAuthState()
+                        onError("当前处于安全锁定或生物识别未启用，请使用主密码")
+                        return@launch
+                    }
                     tokenRepository.unlockAndLoad()
                     backgroundLockMonitor.resetBackgroundTimer()
                     isUnlockedFlow.value = true
@@ -182,6 +242,7 @@ class AppViewModel(
         routeFlow.value = AppRoute.Home
         activeModalFlow.value = ActiveModal.None
         tokenRepository.lockInMemory()
+        _lockSessionCounter.update { it + 1L }
         refreshAuthState()
     }
 
@@ -195,6 +256,10 @@ class AppViewModel(
             }
         }
         refreshAuthState()
+    }
+
+    fun onWindowFocusGained(context: Context) {
+        ClipboardGuard.clearIfExpiredOnWindowFocus(context)
     }
 
     fun suppressNextBackgroundLock() {
@@ -261,8 +326,11 @@ class AppViewModel(
         viewModelScope.launch {
             tokenRepository.wipeInMemoryState()
             preferencesRepository.clearAllPreferences()
+            ClipboardGuard.clearNow(getApplication())
             securityManager.executePermanentSelfDestruct(silent = false)
             isUnlockedFlow.value = false
+            selfDestructedFlow.value = true
+            _lockSessionCounter.update { it + 1L }
             onComplete()
         }
     }

@@ -14,10 +14,13 @@ import com.f2a.authenticator.data.model.VaultPreferences
 import com.f2a.authenticator.data.model.Workspace
 import com.f2a.authenticator.di.AppContainer
 import com.f2a.authenticator.security.BiometricHelper
+import com.f2a.authenticator.security.BiometricStatus
 import com.f2a.authenticator.security.PinConfigResult
 import com.f2a.authenticator.security.SecurityLockManager
+import com.f2a.authenticator.security.VaultHealthAnalyzer
 import com.f2a.authenticator.ui.state.SettingsUiState
 import com.f2a.authenticator.ui.state.TrashItemUi
+import com.f2a.authenticator.utils.ClipboardGuard
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -33,6 +36,7 @@ class SettingsViewModel(
     private val tokenRepository = container.tokenRepository
     private val preferencesRepository = container.preferencesRepository
     private val securityManager = container.securityLockManager
+    private val clock = container.clock
 
     private val securityMetaFlow = MutableStateFlow(readSecurityMeta())
 
@@ -55,7 +59,7 @@ class SettingsViewModel(
         val prefs = values[4] as VaultPreferences
         val sec = values[5] as SecurityMeta
 
-        val now = System.currentTimeMillis()
+        val now = clock.currentTimeMillis()
         val retentionMs = 7L * 24 * 60 * 60 * 1000
         val dayMs = 24L * 60 * 60 * 1000
         val trashItems = trashed.map { token ->
@@ -71,6 +75,15 @@ class SettingsViewModel(
         }.sortedByDescending { it.deletedAt }
 
         val countsByWs = tokens.groupingBy { it.workspaceId }.eachCount()
+        val healthReport = VaultHealthAnalyzer.analyze(
+            tokens = tokens,
+            preferences = prefs,
+            isDuressConfigured = sec.hasDuressPin,
+            isBiometricEnabled = sec.biometricEnabled,
+            nowMs = now,
+            isFlagSecureEnabled = sec.flagSecureEnabled,
+            clipboardClearSeconds = sec.clipboardClearSeconds
+        )
 
         SettingsUiState(
             workspaces = workspaces,
@@ -86,7 +99,10 @@ class SettingsViewModel(
             biometricStatus = sec.biometricStatus,
             themeMode = prefs.themeMode,
             collapsePolicy = prefs.collapsePolicy,
-            autoLockTimeout = prefs.autoLockTimeout
+            autoLockTimeout = prefs.autoLockTimeout,
+            privacyMaskEnabled = prefs.privacyMaskEnabled,
+            lastBackupAtMillis = prefs.lastBackupAtMillis,
+            healthReport = healthReport
         )
     }.stateIn(
         scope = viewModelScope,
@@ -100,7 +116,7 @@ class SettingsViewModel(
         val clipboardClearSeconds: Int,
         val hasDuressPin: Boolean,
         val biometricEnabled: Boolean,
-        val biometricStatus: com.f2a.authenticator.security.BiometricStatus
+        val biometricStatus: BiometricStatus
     )
 
     private fun readSecurityMeta(): SecurityMeta = SecurityMeta(
@@ -109,7 +125,11 @@ class SettingsViewModel(
         clipboardClearSeconds = securityManager.getClipboardClearSeconds(),
         hasDuressPin = securityManager.hasDuressPin(),
         biometricEnabled = securityManager.isBiometricEnabled(),
-        biometricStatus = BiometricHelper.checkAvailability(getApplication())
+        biometricStatus = try {
+            BiometricHelper.checkAvailability(getApplication())
+        } catch (_: Throwable) {
+            BiometricStatus.UNSUPPORTED
+        }
     )
 
     fun refreshSecurityMeta() {
@@ -136,6 +156,10 @@ class SettingsViewModel(
         refreshSecurityMeta()
     }
 
+    fun setPrivacyMaskEnabled(enabled: Boolean) {
+        preferencesRepository.setPrivacyMaskEnabled(enabled)
+    }
+
     fun setThemeMode(mode: ThemeMode) {
         preferencesRepository.setThemeMode(mode)
     }
@@ -159,8 +183,7 @@ class SettingsViewModel(
                 (res.verifyResult is SecurityLockManager.VerifyResult.DuressTriggered ||
                     res.verifyResult is SecurityLockManager.VerifyResult.SelfDestructed)
             ) {
-                tokenRepository.wipeInMemoryState()
-                preferencesRepository.clearAllPreferences()
+                wipeVaultOnDestruct()
             }
             refreshSecurityMeta()
             onResult(res)
@@ -178,8 +201,7 @@ class SettingsViewModel(
                 (res.verifyResult is SecurityLockManager.VerifyResult.DuressTriggered ||
                     res.verifyResult is SecurityLockManager.VerifyResult.SelfDestructed)
             ) {
-                tokenRepository.wipeInMemoryState()
-                preferencesRepository.clearAllPreferences()
+                wipeVaultOnDestruct()
             }
             refreshSecurityMeta()
             onResult(res)
@@ -196,8 +218,7 @@ class SettingsViewModel(
                 (res.verifyResult is SecurityLockManager.VerifyResult.DuressTriggered ||
                     res.verifyResult is SecurityLockManager.VerifyResult.SelfDestructed)
             ) {
-                tokenRepository.wipeInMemoryState()
-                preferencesRepository.clearAllPreferences()
+                wipeVaultOnDestruct()
             }
             refreshSecurityMeta()
             onResult(res)
@@ -216,13 +237,19 @@ class SettingsViewModel(
                 }
                 is SecurityLockManager.VerifyResult.DuressTriggered,
                 is SecurityLockManager.VerifyResult.SelfDestructed -> {
-                    tokenRepository.wipeInMemoryState()
-                    preferencesRepository.clearAllPreferences()
+                    wipeVaultOnDestruct()
                 }
                 else -> Unit
             }
+            refreshSecurityMeta()
             onResult(verify)
         }
+    }
+
+    private suspend fun wipeVaultOnDestruct() {
+        tokenRepository.wipeInMemoryState()
+        preferencesRepository.clearAllPreferences()
+        ClipboardGuard.clearNow(getApplication())
     }
 
     fun addWorkspace(name: String) {

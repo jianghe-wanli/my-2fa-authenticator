@@ -12,6 +12,7 @@ import com.f2a.authenticator.security.BackgroundLockMonitor
 import com.f2a.authenticator.security.Clock
 import com.f2a.authenticator.security.SecurityLockManager
 import com.f2a.authenticator.security.SystemClockImpl
+import com.f2a.authenticator.utils.ClipboardGuard
 
 interface AppContainer {
     val clock: Clock
@@ -49,7 +50,14 @@ class DefaultAppContainer(context: Context) : AppContainer {
             context = appContext,
             clock = clock,
             cipher = secretCipher
-        )
+        ).apply {
+            // 【安全红线】自毁/胁迫销毁磁盘与硬件密钥前，先同步阻断回写并清空内存库、偏好与剪贴板
+            setOnBeforeDestructListener {
+                tokenRepository.wipeInMemoryImmediate()
+                preferencesRepository.clearAllPreferences()
+                ClipboardGuard.clearNow(appContext)
+            }
+        }
     }
 
     override val backgroundLockMonitor: BackgroundLockMonitor by lazy {

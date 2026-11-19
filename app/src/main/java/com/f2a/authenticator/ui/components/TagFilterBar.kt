@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
@@ -48,6 +49,7 @@ import com.f2a.authenticator.data.model.SortMode
 import com.f2a.authenticator.data.model.Tag
 import com.f2a.authenticator.ui.state.IssuerGroupUi
 import com.f2a.authenticator.ui.theme.IconSize
+import com.f2a.authenticator.ui.theme.LocalSemanticColors
 import com.f2a.authenticator.ui.theme.Radius
 import com.f2a.authenticator.ui.theme.Space
 import com.f2a.authenticator.ui.theme.Touch
@@ -79,22 +81,28 @@ fun TagFilterBar(
             horizontalArrangement = Arrangement.spacedBy(Space.S),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            item(key = "all_tags") {
+            item(key = "all_tags", contentType = "tag_all") {
                 TagPill(
                     label = "全部标签",
                     selected = selectedTagFilterId == null,
                     tagColor = MaterialTheme.colorScheme.primary,
+                    showColorDot = false,
                     onClick = { onSelectTag(null) }
                 )
             }
 
-            items(tags, key = { it.id }) { tag ->
+            items(
+                items = tags,
+                key = { it.id },
+                contentType = { "tag_pill" }
+            ) { tag ->
                 val isSelected = selectedTagFilterId == tag.id
                 val tagColor = remember(tag.colorHex) { parseHexColor(tag.colorHex) }
                 TagPill(
                     label = tag.name,
                     selected = isSelected,
                     tagColor = tagColor,
+                    showColorDot = true,
                     onClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onSelectTag(if (isSelected) null else tag.id)
@@ -106,7 +114,7 @@ fun TagFilterBar(
                 )
             }
 
-            item(key = "add_tag") {
+            item(key = "add_tag", contentType = "tag_add") {
                 IconButton(
                     onClick = onAddTagClick,
                     modifier = Modifier.size(Touch.MinTarget)
@@ -129,7 +137,6 @@ fun TagFilterBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(Space.S)
             ) {
-                // 一键全部展开/折叠（筛选态全部命中组自动展开，无需误操作持久化态）
                 if (!isFiltering) {
                     CompactToolPill(
                         onClick = {
@@ -152,7 +159,6 @@ fun TagFilterBar(
                     }
                 }
 
-                // 排序方式下拉
                 Box {
                     CompactToolPill(onClick = { sortMenuExpanded = true }) {
                         Icon(
@@ -177,7 +183,7 @@ fun TagFilterBar(
                                 text = {
                                     Text(
                                         text = sortModeLabel(mode),
-                                        fontWeight = if (mode == sortMode) FontWeight.Bold else FontWeight.Normal,
+                                        fontWeight = if (mode == sortMode) FontWeight.SemiBold else FontWeight.Normal,
                                         color = if (mode == sortMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                                     )
                                 },
@@ -190,22 +196,25 @@ fun TagFilterBar(
                     }
                 }
 
-                // 横向平台快跳索引胶囊
                 LazyRow(
                     modifier = Modifier.weight(1f),
                     horizontalArrangement = Arrangement.spacedBy(Space.HS),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    items(issuerGroups, key = { "jump_${it.key}" }) { group ->
+                    items(
+                        items = issuerGroups,
+                        key = { "jump_${it.key}" },
+                        contentType = { "issuer_jump" }
+                    ) { group ->
                         Box(
                             modifier = Modifier
                                 .heightIn(min = Touch.CompactChipHeight)
                                 .clip(RoundedCornerShape(Radius.M))
                                 .background(
                                     if (group.isExpanded) {
-                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
+                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.8f)
                                     } else {
-                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f)
                                     }
                                 )
                                 .clickable {
@@ -239,14 +248,15 @@ private fun CompactToolPill(
     onClick: () -> Unit,
     content: @Composable () -> Unit
 ) {
+    val semantic = LocalSemanticColors.current
     Row(
         modifier = Modifier
             .heightIn(min = Touch.CompactChipHeight)
             .clip(RoundedCornerShape(Radius.M))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
             .border(
                 width = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
+                color = semantic.borderSubtle,
                 shape = RoundedCornerShape(Radius.M)
             )
             .clickable(onClick = onClick)
@@ -269,27 +279,40 @@ private fun TagPill(
     label: String,
     selected: Boolean,
     tagColor: Color,
+    showColorDot: Boolean,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null
 ) {
-    val shape = RoundedCornerShape(Radius.M)
-    val bgColor = if (selected) tagColor.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
-    val borderColor = if (selected) tagColor.copy(alpha = 0.7f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
-    Box(
+    val semantic = LocalSemanticColors.current
+    val shape = RoundedCornerShape(Radius.Full)
+    val bgColor = if (selected) tagColor.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+    val borderColor = if (selected) tagColor.copy(alpha = 0.65f) else semantic.borderSubtle
+    val selectedTextColor = accessibleTagTextColor(tagColor, semantic.isDark)
+
+    Row(
         modifier = Modifier
-            .heightIn(min = Touch.MinTarget)
+            .heightIn(min = Touch.CompactChipHeight)
             .clip(shape)
             .background(bgColor)
             .border(1.dp, borderColor, shape)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = Space.M, vertical = Space.S),
-        contentAlignment = Alignment.Center
+        verticalAlignment = Alignment.CenterVertically
     ) {
+        if (showColorDot) {
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(tagColor)
+            )
+            Spacer(modifier = Modifier.width(Space.HS))
+        }
         Text(
             text = label,
             style = Type.Label,
-            fontWeight = if (selected) FontWeight.ExtraBold else FontWeight.SemiBold,
-            color = if (selected) tagColor else MaterialTheme.colorScheme.onSurfaceVariant
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            color = if (selected) selectedTextColor else MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }

@@ -1,12 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- RV-06：明确排除敏感 SharedPreferences，云备份/换机迁移均不带走 -->
+<!-- 全面排除全部本地库文件、偏好设置与数据库，严禁云备份或换机迁移带走密文与元数据 -->
 <data-extraction-rules>
     <cloud-backup>
-        <exclude domain="sharedpref" path="my_2fa_secure_store.xml" />
-        <exclude domain="sharedpref" path="security_vault_guard.xml" />
+        <exclude domain="file" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="database" path="." />
     </cloud-backup>
     <device-transfer>
-        <exclude domain="sharedpref" path="my_2fa_secure_store.xml" />
-        <exclude domain="sharedpref" path="security_vault_guard.xml" />
+        <exclude domain="file" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="database" path="." />
     </device-transfer>
 </data-extraction-rules>

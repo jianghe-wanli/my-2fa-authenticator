@@ -43,5 +43,9 @@ data class HomeUiState(
     val groupsByWorkspace: Map<String, List<IssuerGroupUi>> = emptyMap(),
     val allExpanded: Boolean = false,
     val clipboardClearSeconds: Int = 45,
-    val isLoaded: Boolean = false
+    val isLoaded: Boolean = false,
+    val privacyMaskEnabled: Boolean = false,
+    val backupOverdueBanner: Boolean = false,
+    val daysSinceLastBackup: Int? = null,
+    val vaultLoadCorrupted: Boolean = false
 )

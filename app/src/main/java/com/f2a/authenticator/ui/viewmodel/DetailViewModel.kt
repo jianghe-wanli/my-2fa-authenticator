@@ -8,6 +8,7 @@ import com.f2a.authenticator.data.model.AuthToken
 import com.f2a.authenticator.data.model.Tag
 import com.f2a.authenticator.data.model.Workspace
 import com.f2a.authenticator.security.SecurityLockManager
+import com.f2a.authenticator.totp.OtpUriParser
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
@@ -28,6 +29,8 @@ class DetailViewModel(
         tokenRepository.tokens.value.firstOrNull { it.id == tokenId }
 
     fun getClipboardClearSeconds(): Int = securityManager.getClipboardClearSeconds()
+
+    fun buildExportUri(token: AuthToken): String? = OtpUriParser.buildOtpAuthUri(token)
 
     fun updateToken(token: AuthToken) {
         viewModelScope.launch {
