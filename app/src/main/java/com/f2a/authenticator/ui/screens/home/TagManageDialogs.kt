@@ -117,7 +117,8 @@ fun CreateTagDialog(
                 OutlinedTextField(
                     value = newTagName,
                     onValueChange = { newTagName = it },
-                    label = { Text("标签名称 (如: 主要账号, 辅助小号)") },
+                    label = { Text("标签名称") },
+                    placeholder = { Text("如 主要账号、辅助小号") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(Radius.S)

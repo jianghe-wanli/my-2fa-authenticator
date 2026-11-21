@@ -342,7 +342,8 @@ fun AddTokenDialog(
                         OutlinedTextField(
                             value = issuer,
                             onValueChange = { issuer = it; errorMessage = "" },
-                            label = { Text("平台/服务商 (如: AWS, Google, Steam)") },
+                            label = { Text("平台/服务商") },
+                            placeholder = { Text("如 AWS、Google、Steam") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(Radius.M)
@@ -351,7 +352,8 @@ fun AddTokenDialog(
                         OutlinedTextField(
                             value = accountName,
                             onValueChange = { accountName = it },
-                            label = { Text("账号/邮箱 (如: user@company.com)") },
+                            label = { Text("账号/邮箱") },
+                            placeholder = { Text("如 user@company.com") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(Radius.M)
@@ -360,8 +362,8 @@ fun AddTokenDialog(
                         OutlinedTextField(
                             value = secret,
                             onValueChange = { secret = it; errorMessage = "" },
-                            label = { Text("Secret 密钥 (Base32，至少 8 位)") },
-                            placeholder = { Text("例如: JBSWY3DPEHPK3PXP") },
+                            label = { Text("Secret 密钥") },
+                            placeholder = { Text("Base32，至少 8 位，如 JBSWY3DPEHPK3PXP") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(Radius.M)
@@ -370,7 +372,8 @@ fun AddTokenDialog(
                         OutlinedTextField(
                             value = tenantEnv,
                             onValueChange = { tenantEnv = it },
-                            label = { Text("环境/多租户标注 (选填，如: Prod, Dev)") },
+                            label = { Text("环境标注 (选填)") },
+                            placeholder = { Text("如 Prod、Dev") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(Radius.M)

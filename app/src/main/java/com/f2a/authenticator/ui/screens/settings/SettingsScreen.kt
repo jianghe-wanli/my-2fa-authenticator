@@ -83,6 +83,7 @@ import com.f2a.authenticator.ui.theme.Radius
 import com.f2a.authenticator.ui.theme.Space
 import com.f2a.authenticator.ui.theme.Touch
 import com.f2a.authenticator.ui.theme.Type
+import com.f2a.authenticator.ui.theme.contentMaxWidth
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -167,7 +168,8 @@ fun SettingsScreen(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
+                .padding(innerPadding)
+                .contentMaxWidth(),
             contentPadding = PaddingValues(start = Space.L, end = Space.L, top = Space.MS, bottom = Space.X4L),
             verticalArrangement = Arrangement.spacedBy(Space.M)
         ) {
