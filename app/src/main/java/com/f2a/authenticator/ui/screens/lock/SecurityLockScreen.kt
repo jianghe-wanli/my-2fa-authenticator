@@ -51,6 +51,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -67,6 +68,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
 import com.f2a.authenticator.security.PinConfigResult
@@ -105,7 +107,7 @@ fun SecurityLockScreen(
     var isVerifying by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf("") }
     var lockoutSeconds by remember(authState.lockoutSeconds) {
-        mutableStateOf(authState.lockoutSeconds)
+        mutableLongStateOf(authState.lockoutSeconds)
     }
     var shakeTrigger by remember { mutableIntStateOf(0) }
     val shakeOffset = remember { Animatable(0f) }
@@ -276,7 +278,7 @@ fun SecurityLockScreen(
                 val activeColor = if (hasError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                 Row(
                     modifier = Modifier
-                        .offset(x = shakeOffset.value.dp)
+                        .offset { IntOffset(shakeOffset.value.dp.roundToPx(), 0) }
                         .semantics(mergeDescendants = true) {
                             contentDescription = "已输入 $currentLength 位，共 6 位"
                         },
