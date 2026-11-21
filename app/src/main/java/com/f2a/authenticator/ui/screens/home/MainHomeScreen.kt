@@ -9,6 +9,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -93,6 +95,7 @@ import com.f2a.authenticator.ui.components.TagFilterBar
 import com.f2a.authenticator.ui.components.WorkspaceTabBar
 import com.f2a.authenticator.ui.components.collapsingHeaderConnection
 import com.f2a.authenticator.ui.components.rememberCollapsingHeaderState
+import com.f2a.authenticator.ui.components.rememberForwardingScrollState
 import com.f2a.authenticator.ui.state.HomeUiState
 import com.f2a.authenticator.ui.theme.IconSize
 import com.f2a.authenticator.ui.theme.LocalSemanticColors
@@ -208,6 +211,7 @@ fun MainHomeScreen(
 
     val headerState = rememberCollapsingHeaderState()
     val activeWorkspaceId by rememberUpdatedState(uiState.activeWorkspaceId)
+    val outsideListScroll = rememberForwardingScrollState { listStates[activeWorkspaceId] }
     val headerConnection = remember(headerState, listStates) {
         collapsingHeaderConnection(headerState) {
             listStates[activeWorkspaceId]?.canScrollForward == true
@@ -334,8 +338,9 @@ fun MainHomeScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .contentMaxWidth()
                 .nestedScroll(headerConnection)
+                .scrollable(outsideListScroll, Orientation.Vertical)
+                .contentMaxWidth()
         ) {
             // 独立搜索胶囊栏（彻底解决 TopAppBar 内嵌 TextField 裁切问题）
             AnimatedVisibility(

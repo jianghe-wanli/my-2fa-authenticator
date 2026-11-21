@@ -2,6 +2,8 @@ package com.f2a.authenticator.ui.screens.settings
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.scrollable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -83,6 +85,7 @@ import com.f2a.authenticator.ui.theme.Radius
 import com.f2a.authenticator.ui.theme.Space
 import com.f2a.authenticator.ui.theme.Touch
 import com.f2a.authenticator.ui.theme.Type
+import com.f2a.authenticator.ui.components.rememberForwardingScrollState
 import com.f2a.authenticator.ui.theme.contentMaxWidth
 import kotlinx.coroutines.launch
 
@@ -169,6 +172,7 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .scrollable(rememberForwardingScrollState { listState }, Orientation.Vertical)
                 .contentMaxWidth(),
             contentPadding = PaddingValues(start = Space.L, end = Space.L, top = Space.MS, bottom = Space.X4L),
             verticalArrangement = Arrangement.spacedBy(Space.M)

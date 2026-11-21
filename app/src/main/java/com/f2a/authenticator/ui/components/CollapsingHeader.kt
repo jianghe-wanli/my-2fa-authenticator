@@ -1,5 +1,8 @@
 package com.f2a.authenticator.ui.components
 
+import androidx.compose.foundation.gestures.ScrollableState
+import androidx.compose.foundation.gestures.rememberScrollableState
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -63,6 +66,14 @@ fun collapsingHeaderConnection(
         return Offset(0f, state.scrollBy(available.y, canCollapse()))
     }
 }
+
+/**
+ * 把列表之外区域（限宽后的两侧留白、列表上方的头部）上的纵向拖动转交给 [target]，
+ * 否则横屏时只有中间的列表本身能拖动。配合 `Modifier.scrollable(state, Orientation.Vertical)` 使用。
+ */
+@Composable
+fun rememberForwardingScrollState(target: () -> LazyListState?): ScrollableState =
+    rememberScrollableState { delta -> target()?.let { -it.dispatchRawDelta(-delta) } ?: 0f }
 
 @Composable
 fun CollapsingHeader(
