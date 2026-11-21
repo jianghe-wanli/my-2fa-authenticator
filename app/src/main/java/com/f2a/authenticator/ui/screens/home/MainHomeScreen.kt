@@ -439,10 +439,7 @@ fun MainHomeScreen(
                             TextButton(onClick = onOpenBackupDialog) {
                                 Text("去备份", style = Type.Label, color = MaterialTheme.colorScheme.primary)
                             }
-                            IconButton(
-                                onClick = { backupBannerDismissed = true },
-                                modifier = Modifier.size(36.dp)
-                            ) {
+                            IconButton(onClick = { backupBannerDismissed = true }) {
                                 Icon(
                                     imageVector = Icons.Default.Close,
                                     contentDescription = "暂不提醒",
@@ -686,10 +683,7 @@ private fun SearchCapsuleBar(
                 )
             }
             if (query.isNotEmpty()) {
-                IconButton(
-                    onClick = onClearQuery,
-                    modifier = Modifier.size(36.dp)
-                ) {
+                IconButton(onClick = onClearQuery) {
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "清空搜索词",

@@ -310,7 +310,7 @@ fun SettingsScreen(
                         SettingDivider()
 
                         SettingRow(
-                            title = "防屏幕截图与录屏 (FLAG_SECURE)",
+                            title = "防屏幕截图与录屏",
                             description = "禁止系统后台截屏、录屏与多任务卡片偷窥"
                         ) {
                             Switch(
