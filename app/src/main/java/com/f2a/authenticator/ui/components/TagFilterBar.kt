@@ -75,8 +75,11 @@ fun TagFilterBar(
     var sortMenuExpanded by remember { mutableStateOf(false) }
 
     Column(modifier = modifier.fillMaxWidth()) {
+        // 固定为最小触控高度：否则“新建标签”按钮滑入时行高会从 34dp 跳到 48dp，且标签的触控区被行裁剪
         LazyRow(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = Touch.MinTarget),
             contentPadding = PaddingValues(horizontal = Space.L),
             horizontalArrangement = Arrangement.spacedBy(Space.S),
             verticalAlignment = Alignment.CenterVertically
