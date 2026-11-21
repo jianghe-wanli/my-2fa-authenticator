@@ -61,6 +61,7 @@ fun TagFilterBar(
     selectedTagFilterId: String?,
     issuerGroups: List<IssuerGroupUi>,
     allExpanded: Boolean,
+    modifier: Modifier = Modifier,
     isFiltering: Boolean = false,
     sortMode: SortMode,
     onSelectTag: (String?) -> Unit,
@@ -68,8 +69,7 @@ fun TagFilterBar(
     onAddTagClick: () -> Unit,
     onToggleExpandAll: () -> Unit,
     onSelectSortMode: (SortMode) -> Unit,
-    onJumpToIssuer: (String) -> Unit,
-    modifier: Modifier = Modifier
+    onJumpToIssuer: (String) -> Unit
 ) {
     val haptic = LocalHapticFeedback.current
     var sortMenuExpanded by remember { mutableStateOf(false) }
